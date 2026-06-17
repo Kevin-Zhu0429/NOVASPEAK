@@ -6,6 +6,17 @@ import dotenv from "dotenv";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { randomUUID } from "node:crypto";
 import db from "./db.js";
+import cookieParser from "cookie-parser";
+import {
+  hashPassword,
+  verifyPassword,
+} from "./auth-utils.js";
+import {
+  createLoginSession,
+  destroyLoginSession,
+  getCurrentUser,
+  requireCaptain,
+} from "./auth-session.js";
 
 dotenv.config();
 
@@ -19,8 +30,12 @@ const clientDistPath = path.resolve(
 
 const app = express();
 
+// Cloudflare Tunnel 通过本机回环地址连接 Express
+app.set("trust proxy", "loopback");
+
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
 
 function getLiveKitHttpUrl() {
   const url = process.env.LIVEKIT_URL;
@@ -55,6 +70,176 @@ async function getChannelStatus(channel) {
     };
   }
 }
+
+function normalizeNickname(value) {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+
+
+app.post("/api/auth/member-login",
+  async (req, res) => {
+    try {
+      const nickname =
+        req.body?.nickname;
+
+      const password =
+        req.body?.password;
+
+      if (
+        typeof nickname !== "string" ||
+        typeof password !== "string"
+      ) {
+        return res.status(400).json({
+          error: "请输入游戏昵称和密码",
+        });
+      }
+
+      const nicknameKey =
+        normalizeNickname(nickname);
+
+      if (
+        nicknameKey.length < 1 ||
+        nicknameKey.length > 30 ||
+        password.length < 1 ||
+        password.length > 128
+      ) {
+        return res.status(400).json({
+          error: "游戏昵称或密码格式不正确",
+        });
+      }
+
+      const user = db.prepare(`
+        SELECT
+          id,
+          username,
+          username_key,
+          display_name,
+          password_hash,
+          role,
+          position
+        FROM users
+        WHERE username_key = ?
+      `).get(nicknameKey);
+
+      if (!user) {
+        return res.status(401).json({
+          error: "游戏昵称或密码错误",
+        });
+      }
+
+      const passwordIsValid =
+        await verifyPassword(
+          password,
+          user.password_hash
+        );
+
+      if (!passwordIsValid) {
+        return res.status(401).json({
+          error: "游戏昵称或密码错误",
+        });
+      }
+
+      createLoginSession(
+        user.id,
+        req,
+        res
+      );
+
+      const positionNames = {
+        captain: "队长",
+        commander: "指挥",
+        entry: "突破手",
+        sniper: "狙击手",
+        support: "辅助",
+        rifler: "步枪手",
+        freeman: "自由人",
+        backup: "替补",
+        member: "队员",
+      };
+
+      res.json({
+        user: {
+          id: user.id,
+          nickname: user.username,
+          displayName:
+            user.display_name ||
+            user.username,
+
+          role:
+            user.role === "admin"
+              ? "captain"
+              : "member",
+
+          isCaptain:
+            user.role === "admin",
+
+          position:
+            user.position || "member",
+
+          positionName:
+            positionNames[
+              user.position
+            ] || "队员",
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Member login error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "登录失败，请稍后重试",
+      });
+    }
+  }
+);
+
+app.get("/api/auth/me",
+  (req, res) => {
+    try {
+      const user = getCurrentUser(req);
+
+      res.json({
+        user,
+      });
+    } catch (error) {
+      console.error(
+        "Get current user error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "无法获取登录状态",
+      });
+    }
+  }
+);
+
+app.post("/api/auth/logout",
+  (req, res) => {
+    try {
+      destroyLoginSession(req, res);
+
+      res.json({
+        success: true,
+      });
+    } catch (error) {
+      console.error(
+        "Logout error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "退出登录失败",
+      });
+    }
+  }
+);
 
 app.get("/api/channels", async (req, res) => {
   try {
@@ -209,6 +394,263 @@ app.get("/api/token", async (req, res) => {
       error: "failed to create token",
     });
   }
+});
+
+app.get("/api/team/members",
+  requireCaptain,
+  (req, res) => {
+    try {
+      const members = db.prepare(`
+        SELECT
+          id,
+          username AS memberId,
+          COALESCE(display_name, username) AS displayName,
+          role,
+          position,
+          created_at AS createdAt
+        FROM users
+        ORDER BY
+          CASE
+            WHEN role = 'admin' THEN 0
+            ELSE 1
+          END,
+          created_at ASC
+      `).all();
+
+      const positionNames = {
+        captain: "队长",
+        commander: "指挥",
+        entry: "突破手",
+        sniper: "狙击手",
+        member: "队员",
+        rifler: "步枪手",
+        support: "辅助",
+        freeman: "自由人",
+        backup: "替补",
+      };
+
+      res.json({
+        members: members.map((member) => ({
+          id: member.id,
+
+          nickname:
+            member.nickname,
+
+          displayName:
+            member.displayName,
+
+          role:
+            member.role === "admin"
+              ? "captain"
+              : "member",
+
+          isCaptain:
+            member.role === "admin",
+
+          position:
+            member.position,
+
+          positionName:
+            positionNames[
+              member.position
+            ] || "队员",
+
+          createdAt:
+            member.createdAt,
+        })),
+      });
+    } catch (error) {
+      console.error(
+        "Get team members error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "获取战队成员失败",
+      });
+    }
+  }
+);
+
+app.post("/api/team/members",
+  requireCaptain,
+  async (req, res) => {
+    try {
+      const rawNickname = req.body?.nickname;
+
+      const position = req.body?.position;
+
+      const password =
+        req.body?.password;
+
+      if (
+        typeof rawNickname !== "string" ||
+        typeof position !== "string" ||
+        typeof password !== "string"
+      ) {
+        return res.status(400).json({
+          error: "请完整填写成员信息",
+        });
+      }
+
+      const nickname = rawNickname
+        .normalize("NFKC")
+        .trim();
+
+      if (
+        nickname.length < 1 ||
+        nickname.length > 30 ||
+        /[\u0000-\u001F\u007F]/.test(
+          nickname
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "游戏昵称必须为 1—30 个有效字符",
+        });
+      }
+
+      const allowedPositions = [
+        "commander",
+        "entry",
+        "sniper",
+        "member",
+        "rifler",
+        "support",
+        "freeman",
+        "backup",
+      ];
+
+      if (
+        !allowedPositions.includes(position)
+      ) {
+        return res.status(400).json({
+          error: "请选择有效的战队职位",
+        });
+      }
+
+      if (
+        nickname.length < 1 ||
+        nickname.length > 30 ||
+        /[\u0000-\u001F\u007F]/.test(nickname)
+      ) {
+        return res.status(400).json({
+          error: "游戏昵称必须为 1—30 个有效字符",
+        });
+      }
+
+      if (
+        password.length < 8 ||
+        password.length > 128
+      ) {
+        return res.status(400).json({
+          error:
+            "初始密码必须为 8—128 位",
+        });
+      }
+
+      const usernameKey = normalizeNickname(nickname);
+
+      const existingUser = db.prepare(`
+        SELECT id
+        FROM users
+        WHERE username_key = ?
+      `).get(usernameKey);
+
+      if (existingUser) {
+        return res.status(409).json({
+          error: "该成员已经存在",
+        });
+      }
+
+      const newUser = {
+        id: randomUUID(),
+
+        username: nickname,
+        usernameKey,
+
+        displayName: nickname,
+
+        position,
+
+        passwordHash:
+          await hashPassword(password),
+
+        createdAt: Date.now(),
+      };
+
+      db.prepare(`
+        INSERT INTO users (
+          id,
+          username,
+          username_key,
+          display_name,
+          password_hash,
+          role,
+          position,
+          created_at
+        )
+        VALUES (
+          @id,
+          @username,
+          @usernameKey,
+          @displayName,
+          @passwordHash,
+          'member',
+          @position,
+          @createdAt
+        )
+      `).run(newUser);
+
+      res.status(201).json({
+        member: {
+          id: newUser.id,
+          memberId: newUser.username,
+          displayName:
+            newUser.displayName,
+          role: "member",
+          isCaptain: false,
+          position: newUser.position,
+          positionName: {
+            commander: "指挥",
+            entry: "突破手",
+            sniper: "狙击手",
+            support: "辅助",
+            rifler: "步枪手",
+            freeman: "自由人",
+            backup: "替补",
+            member: "队员",
+          }[newUser.position],
+          createdAt:
+            newUser.createdAt,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Create team member error:",
+        error
+      );
+
+      if (
+        error?.code ===
+        "SQLITE_CONSTRAINT_UNIQUE"
+      ) {
+        return res.status(409).json({
+          error: "该成员 ID 已经存在",
+        });
+      }
+
+      res.status(500).json({
+        error: "创建战队成员失败",
+      });
+    }
+  }
+);
+
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: `API 不存在：${req.method} ${req.originalUrl}`,
+  });
 });
 
 // 提供 Vite 打包后的前端文件

@@ -235,15 +235,12 @@ input {
   display: flex;
   flex-direction: column;
 
-  background: rgba(2, 12, 18, 0.42);
+  background: rgba(2, 12, 18, 0.12);
 }
 
 .empty-state {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  flex: 1;
+  background: transparent;
 }
 
 .empty-state h1 {
@@ -440,4 +437,1099 @@ input {
 
 .muted-tag {
   color: #fca5a5;
+}
+
+.nova-login-page,
+.nova-auth-loading {
+  position: relative;
+  z-index: 10;
+
+  width: 100%;
+  min-height: 100vh;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 32px;
+}
+
+.nova-login-container {
+  width: 100%;
+  max-width: 430px;
+}
+
+.nova-login-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.nova-logo-mark,
+.auth-loading-logo {
+  width: 64px;
+  height: 64px;
+
+  margin: 0 auto 18px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid
+    rgba(167, 243, 208, 0.38);
+
+  border-radius: 18px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(45, 212, 191, 0.26),
+      rgba(8, 47, 73, 0.64)
+    );
+
+  box-shadow:
+    0 18px 48px
+      rgba(0, 0, 0, 0.35),
+    inset 0 1px 0
+      rgba(255, 255, 255, 0.12);
+
+  color: white;
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.nova-login-header h1,
+.nova-auth-loading h1 {
+  margin: 0;
+
+  color: white;
+
+  font-size: clamp(
+    34px,
+    6vw,
+    52px
+  );
+
+  font-weight: 300;
+
+  letter-spacing: 0.16em;
+}
+
+.nova-login-header p,
+.nova-auth-loading p {
+  margin: 10px 0 0;
+
+  color: rgba(
+    226,
+    232,
+    240,
+    0.72
+  );
+
+  font-size: 13px;
+
+  letter-spacing: 0.17em;
+
+  text-transform: uppercase;
+}
+
+.nova-member-login-card {
+  padding: 30px;
+
+  border: 1px solid
+    rgba(167, 243, 208, 0.18);
+
+  border-radius: 24px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(3, 18, 27, 0.84),
+      rgba(4, 31, 38, 0.7)
+    );
+
+  backdrop-filter: blur(26px);
+  -webkit-backdrop-filter:
+    blur(26px);
+
+  box-shadow:
+    0 30px 90px
+      rgba(0, 0, 0, 0.45),
+    inset 0 1px 0
+      rgba(255, 255, 255, 0.06);
+}
+
+.nova-team-name {
+  margin-bottom: 8px;
+
+  color: #7dfdd9;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  letter-spacing: 0.22em;
+}
+
+.nova-member-login-card h2 {
+  margin: 0;
+
+  color: white;
+
+  font-size: 25px;
+  font-weight: 500;
+}
+
+.login-description {
+  margin: 8px 0 24px;
+
+  color: #94a3b8;
+
+  font-size: 14px;
+}
+
+.login-field {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.login-field span {
+  display: block;
+  margin-bottom: 8px;
+
+  color: #d1fae5;
+
+  font-size: 13px;
+}
+
+.login-field input {
+  width: 100%;
+  height: 48px;
+
+  padding: 0 14px;
+
+  border: 1px solid
+    rgba(148, 163, 184, 0.24);
+
+  border-radius: 12px;
+
+  outline: none;
+
+  background:
+    rgba(2, 12, 18, 0.72);
+
+  color: white;
+
+  font-size: 15px;
+
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.login-field input:focus {
+  border-color:
+    rgba(94, 234, 212, 0.78);
+
+  background:
+    rgba(2, 18, 24, 0.86);
+
+  box-shadow:
+    0 0 0 4px
+      rgba(45, 212, 191, 0.1);
+}
+
+.login-field input::placeholder {
+  color: #64748b;
+}
+
+.login-error {
+  margin: 2px 0 14px;
+  padding: 11px 12px;
+
+  border: 1px solid
+    rgba(248, 113, 113, 0.3);
+
+  border-radius: 10px;
+
+  background:
+    rgba(127, 29, 29, 0.25);
+
+  color: #fecaca;
+
+  font-size: 13px;
+}
+
+.member-login-button,
+.guest-login-button {
+  width: 100%;
+  height: 48px;
+
+  border-radius: 12px;
+
+  font-size: 15px;
+  font-weight: 600;
+
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease,
+    background 160ms ease;
+}
+
+.member-login-button {
+  background:
+    linear-gradient(
+      135deg,
+      #14b8a6,
+      #0f766e
+    );
+
+  color: white;
+
+  box-shadow:
+    0 12px 30px
+      rgba(20, 184, 166, 0.22);
+}
+
+.member-login-button:hover:not(
+  :disabled
+) {
+  transform: translateY(-1px);
+}
+
+.member-login-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+
+  gap: 12px;
+
+  margin: 22px 0;
+}
+
+.login-divider span {
+  flex: 1;
+  height: 1px;
+
+  background:
+    rgba(148, 163, 184, 0.18);
+}
+
+.login-divider p {
+  margin: 0;
+
+  color: #64748b;
+
+  font-size: 12px;
+}
+
+.guest-login-button {
+  border: 1px solid
+    rgba(148, 163, 184, 0.26);
+
+  background:
+    rgba(15, 23, 42, 0.46);
+
+  color: #e2e8f0;
+}
+
+.guest-login-button:hover {
+  background:
+    rgba(30, 41, 59, 0.72);
+}
+
+.guest-notice {
+  margin-top: 12px;
+  padding: 11px 12px;
+
+  border-radius: 10px;
+
+  background:
+    rgba(8, 47, 73, 0.48);
+
+  color: #bae6fd;
+
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.nova-login-footer {
+  margin-top: 22px;
+
+  text-align: center;
+
+  color: rgba(
+    148,
+    163,
+    184,
+    0.6
+  );
+
+  font-size: 10px;
+
+  letter-spacing: 0.2em;
+}
+
+/* =========================
+   左侧账号和战队管理
+========================= */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar-footer {
+  padding-top: 14px;
+
+  border-top: 1px solid
+    rgba(148, 163, 184, 0.14);
+}
+
+.team-management-button {
+  width: 100%;
+
+  margin-bottom: 10px;
+  padding: 11px 12px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 9px;
+
+  border-radius: 10px;
+
+  background:
+    rgba(20, 184, 166, 0.14);
+
+  color: #99f6e4;
+
+  text-align: left;
+}
+
+.team-management-button:hover {
+  background:
+    rgba(20, 184, 166, 0.24);
+}
+
+.management-icon {
+  font-size: 16px;
+}
+
+.account-panel {
+  display: flex;
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 10px;
+
+  border-radius: 12px;
+
+  background:
+    rgba(2, 12, 18, 0.52);
+}
+
+.account-avatar {
+  width: 36px;
+  height: 36px;
+
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 10px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #14b8a6,
+      #155e75
+    );
+
+  color: white;
+
+  font-weight: 700;
+}
+
+.account-details {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-details strong,
+.account-details span {
+  display: block;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-details strong {
+  color: white;
+  font-size: 13px;
+}
+
+.account-details span {
+  margin-top: 3px;
+
+  color: #94a3b8;
+
+  font-size: 11px;
+}
+
+.logout-button {
+  padding: 6px 8px;
+
+  border-radius: 8px;
+
+  background: transparent;
+
+  color: #94a3b8;
+
+  font-size: 12px;
+}
+
+.logout-button:hover {
+  background:
+    rgba(239, 68, 68, 0.13);
+
+  color: #fca5a5;
+}
+
+.nova-auth-loading {
+  flex-direction: column;
+
+  color: white;
+
+  text-align: center;
+}
+/* =========================
+   战队管理
+========================= */
+
+.team-management-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 28px;
+
+  background: rgba(2, 6, 12, 0.72);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.team-management-modal {
+  width: min(920px, 100%);
+  max-height: calc(100vh - 56px);
+
+  overflow: hidden;
+
+  border: 1px solid
+    rgba(153, 246, 228, 0.18);
+
+  border-radius: 24px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(4, 20, 29, 0.97),
+      rgba(5, 31, 38, 0.94)
+    );
+
+  box-shadow:
+    0 40px 120px
+      rgba(0, 0, 0, 0.62);
+}
+
+.management-header {
+  padding: 24px 26px;
+
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+
+  border-bottom: 1px solid
+    rgba(148, 163, 184, 0.14);
+}
+
+.management-label {
+  color: #5eead4;
+
+  font-size: 11px;
+  font-weight: 700;
+
+  letter-spacing: 0.22em;
+}
+
+.management-header h2 {
+  margin: 6px 0 0;
+
+  color: white;
+
+  font-size: 26px;
+  font-weight: 500;
+}
+
+.management-header p {
+  margin: 7px 0 0;
+
+  color: #94a3b8;
+
+  font-size: 13px;
+}
+
+.management-close {
+  width: 36px;
+  height: 36px;
+
+  border-radius: 10px;
+
+  background:
+    rgba(30, 41, 59, 0.68);
+
+  color: #cbd5e1;
+
+  font-size: 24px;
+  line-height: 1;
+}
+
+.management-close:hover {
+  background:
+    rgba(239, 68, 68, 0.18);
+
+  color: #fecaca;
+}
+
+.management-content {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.25fr)
+    minmax(300px, 0.75fr);
+
+  max-height: calc(100vh - 165px);
+  overflow: auto;
+}
+
+.member-list-section,
+.create-member-section {
+  padding: 24px;
+}
+
+.member-list-section {
+  border-right: 1px solid
+    rgba(148, 163, 184, 0.12);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-bottom: 16px;
+}
+
+.section-heading h3 {
+  margin: 0;
+
+  color: white;
+
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.section-heading > span {
+  padding: 4px 9px;
+
+  border-radius: 999px;
+
+  background:
+    rgba(20, 184, 166, 0.13);
+
+  color: #99f6e4;
+
+  font-size: 11px;
+}
+
+.management-member-list {
+  display: flex;
+  flex-direction: column;
+
+  gap: 9px;
+}
+
+.management-member {
+  display: flex;
+  align-items: center;
+
+  gap: 11px;
+
+  padding: 11px;
+
+  border: 1px solid
+    rgba(148, 163, 184, 0.1);
+
+  border-radius: 12px;
+
+  background:
+    rgba(2, 12, 18, 0.5);
+}
+
+.member-avatar {
+  width: 38px;
+  height: 38px;
+
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 11px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #14b8a6,
+      #155e75
+    );
+
+  color: white;
+
+  font-weight: 700;
+}
+
+.member-information {
+  min-width: 0;
+  flex: 1;
+}
+
+.member-information strong,
+.member-information span {
+  display: block;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-information strong {
+  color: white;
+
+  font-size: 14px;
+}
+
+.member-information span {
+  margin-top: 4px;
+
+  color: #64748b;
+
+  font-size: 11px;
+}
+
+.member-role {
+  padding: 4px 8px;
+
+  border-radius: 999px;
+
+  background:
+    rgba(59, 130, 246, 0.14);
+
+  color: #bfdbfe;
+
+  font-size: 11px;
+}
+
+.member-role.captain {
+  background:
+    rgba(245, 158, 11, 0.14);
+
+  color: #fde68a;
+}
+
+.create-member-form label {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.create-member-form label span {
+  display: block;
+
+  margin-bottom: 7px;
+
+  color: #d1fae5;
+
+  font-size: 12px;
+}
+
+.create-member-form input {
+  width: 100%;
+  height: 44px;
+
+  padding: 0 13px;
+
+  border: 1px solid
+    rgba(148, 163, 184, 0.22);
+
+  border-radius: 11px;
+
+  outline: none;
+
+  background:
+    rgba(2, 12, 18, 0.68);
+
+  color: white;
+}
+
+.create-member-form input:focus {
+  border-color:
+    rgba(94, 234, 212, 0.7);
+
+  box-shadow:
+    0 0 0 4px
+      rgba(45, 212, 191, 0.09);
+}
+
+.management-error,
+.management-success {
+  margin-bottom: 13px;
+  padding: 10px 11px;
+
+  border-radius: 9px;
+
+  font-size: 12px;
+}
+
+.management-error {
+  background:
+    rgba(127, 29, 29, 0.25);
+
+  color: #fecaca;
+}
+
+.management-success {
+  background:
+    rgba(6, 78, 59, 0.3);
+
+  color: #a7f3d0;
+}
+
+.create-member-button {
+  width: 100%;
+  height: 45px;
+
+  border-radius: 11px;
+
+  background:
+    linear-gradient(
+      135deg,
+      #14b8a6,
+      #0f766e
+    );
+
+  color: white;
+
+  font-weight: 600;
+}
+
+.create-member-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.management-empty {
+  padding: 36px;
+
+  text-align: center;
+
+  color: #64748b;
+}
+
+@media (max-width: 760px) {
+  .management-content {
+    grid-template-columns: 1fr;
+  }
+
+  .member-list-section {
+    border-right: none;
+
+    border-bottom: 1px solid
+      rgba(148, 163, 184, 0.12);
+  }
+}
+
+.create-member-form select {
+  width: 100%;
+  height: 44px;
+
+  padding: 0 13px;
+
+  border: 1px solid
+    rgba(148, 163, 184, 0.22);
+
+  border-radius: 11px;
+
+  outline: none;
+
+  background: rgba(2, 12, 18, 0.9);
+  color: white;
+}
+
+/* =========================
+   NOVA GAMING 登录欢迎动画
+========================= */
+
+.welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  overflow: hidden;
+
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(13, 148, 136, 0.3),
+      rgba(2, 6, 12, 0.95) 58%,
+      rgba(1, 4, 8, 0.99)
+    );
+
+  pointer-events: none;
+
+  animation: welcomeOverlay 5.6s ease forwards;
+}
+
+.welcome-light {
+  position: absolute;
+
+  width: 34vw;
+  height: 180vh;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(94, 234, 212, 0.18),
+      transparent
+    );
+
+  transform:
+    rotate(24deg)
+    translateX(-130vw);
+
+  filter: blur(22px);
+
+  animation:
+    welcomeSweep 3.8s
+    ease-out forwards;
+}
+
+.welcome-content {
+  position: relative;
+
+  text-align: center;
+  color: white;
+
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  animation:
+    welcomeContent 5.6s
+    cubic-bezier(0.22, 1, 0.36, 1)
+    forwards;
+}
+
+.welcome-small-text {
+  margin-bottom: 20px;
+
+  color: #99f6e4;
+
+  font-size: 20px;
+  font-weight: 600;
+
+  letter-spacing: 0.52em;
+}
+
+.welcome-team-text {
+  font-size:
+    clamp(46px, 8vw, 94px);
+
+  font-weight: 300;
+
+  letter-spacing: 0.13em;
+
+  text-shadow:
+    0 0 14px
+      rgba(45, 212, 191, 0.32),
+    0 0 32px
+      rgba(20, 184, 166, 0.16);
+}
+
+.welcome-line {
+  width: 0;
+  height: 1px;
+
+  margin: 24px auto;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      #5eead4,
+      transparent
+    );
+
+  animation:
+    welcomeLine 1.3s
+    0.7s ease forwards;
+}
+
+.welcome-member-text {
+  color:
+    rgba(226, 232, 240, 0.88);
+
+  font-size: 15px;
+  font-weight: 400;
+
+  letter-spacing: 0.12em;
+}
+
+.welcome-identity {
+  margin-top: 18px;
+
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+
+  gap: 14px;
+
+  opacity: 0;
+
+  animation:
+    welcomeIdentity 0.9s
+    1.2s ease forwards;
+}
+
+.welcome-identity span {
+  color: #5eead4;
+
+  font-size: clamp(30px, 4vw, 50px);
+  font-weight: 600;
+}
+
+.welcome-identity strong {
+  color: white;
+
+  font-size:
+    clamp(30px, 4vw, 50px);
+
+  font-weight: 600;
+
+  letter-spacing: 0.06em;
+
+  text-shadow:
+    0 0 12px
+      rgba(94, 234, 212, 0.22);
+}
+
+.welcome-identity em {
+  color: #cbd5e1;
+
+  font-size: 15px;
+  font-style: normal;
+}
+
+@keyframes welcomeOverlay {
+  0% {
+    opacity: 0;
+  }
+
+  9%,
+  82% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes welcomeSweep {
+  0% {
+    transform:
+      rotate(24deg)
+      translateX(-130vw);
+  }
+
+  100% {
+    transform:
+      rotate(24deg)
+      translateX(130vw);
+  }
+}
+
+@keyframes welcomeContent {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  16% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  82% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes welcomeLine {
+  to {
+    width: min(560px, 72vw);
+  }
+}
+
+@keyframes welcomeIdentity {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

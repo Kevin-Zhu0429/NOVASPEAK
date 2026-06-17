@@ -72,6 +72,60 @@ db.exec(`
   );
 `);
 
+// 兼容旧数据库：为 users 表增加 display_name 字段
+const userColumns = db
+  .prepare("PRAGMA table_info(users)")
+  .all();
+
+const hasDisplayName = userColumns.some(
+  (column) => column.name === "display_name"
+);
+
+if (!hasDisplayName) {
+  db.exec(`
+    ALTER TABLE users
+    ADD COLUMN display_name TEXT
+  `);
+
+  console.log("Database migration: added users.display_name");
+}
+
+// 兼容旧数据库：增加战队职位字段
+const latestUserColumns = db
+  .prepare("PRAGMA table_info(users)")
+  .all();
+
+const hasPosition = latestUserColumns.some(
+  (column) => column.name === "position"
+);
+
+if (!hasPosition) {
+  db.exec(`
+    ALTER TABLE users
+    ADD COLUMN position TEXT NOT NULL DEFAULT 'member'
+  `);
+
+  console.log(
+    "Database migration: added users.position"
+  );
+}
+
+// 系统管理员账号默认为队长职位
+db.prepare(`
+  UPDATE users
+  SET position = 'captain'
+  WHERE role = 'admin'
+`).run();
+
+// 旧用户没有显示名称时，暂时使用成员 ID
+db.prepare(`
+  UPDATE users
+  SET display_name = username
+  WHERE
+    display_name IS NULL
+    OR TRIM(display_name) = ''
+`).run();
+
 function normalizeKey(value) {
   return value
     .normalize("NFKC")

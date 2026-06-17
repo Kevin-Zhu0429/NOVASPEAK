@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "node index.js"
+    "dev": "node index.js",
+    "create-captain": "node scripts/create-captain.js",
+    "use-nicknames": "node scripts/use-nicknames-as-login.js"
   },
   "keywords": [],
   "author": "Kevin",
@@ -12,6 +14,7 @@
   "type": "module",
   "dependencies": {
     "better-sqlite3": "^12.11.1",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
