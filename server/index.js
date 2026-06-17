@@ -16,6 +16,8 @@ import {
   destroyLoginSession,
   getCurrentUser,
   requireCaptain,
+  requireMember,
+  toPublicUser
 } from "./auth-session.js";
 
 dotenv.config();
@@ -119,8 +121,7 @@ app.post("/api/auth/member-login",
           username_key,
           display_name,
           password_hash,
-          role,
-          position
+          role
         FROM users
         WHERE username_key = ?
       `).get(nicknameKey);
@@ -162,29 +163,7 @@ app.post("/api/auth/member-login",
       };
 
       res.json({
-        user: {
-          id: user.id,
-          nickname: user.username,
-          displayName:
-            user.display_name ||
-            user.username,
-
-          role:
-            user.role === "admin"
-              ? "captain"
-              : "member",
-
-          isCaptain:
-            user.role === "admin",
-
-          position:
-            user.position || "member",
-
-          positionName:
-            positionNames[
-              user.position
-            ] || "队员",
-        },
+        user: toPublicUser(user),
       });
     } catch (error) {
       console.error(
@@ -209,7 +188,7 @@ app.get("/api/auth/me",
       });
     } catch (error) {
       console.error(
-        "Get current user error:",
+        "GET /api/auth/me 失败：",
         error
       );
 

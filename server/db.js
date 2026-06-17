@@ -72,6 +72,32 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_positions (
+    user_id INTEGER NOT NULL,
+    position TEXT NOT NULL CHECK (
+      position IN (
+        'captain',
+        'commander',
+        'entry',
+        'sniper',
+        'support',
+        'rifler',
+        'freeman',
+        'backup',
+        'member'
+      )
+    ),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, position),
+
+    FOREIGN KEY (user_id)
+      REFERENCES users(id)
+      ON DELETE CASCADE
+  );
+`);
+
 // 兼容旧数据库：为 users 表增加 display_name 字段
 const userColumns = db
   .prepare("PRAGMA table_info(users)")

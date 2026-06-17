@@ -15,6 +15,7 @@ const SESSION_DURATION_MS =
  * 数据库用户转换为可以发送给前端的安全对象。
  * 不返回密码哈希。
  */
+
 const POSITION_NAMES = {
   captain: "队长",
   commander: "指挥",
@@ -27,39 +28,72 @@ const POSITION_NAMES = {
   member: "队员",
 };
 
+function getUserPositions(userId) {
+  return db.prepare(`
+    SELECT position
+    FROM user_positions
+    WHERE user_id = ?
+    ORDER BY
+      CASE position
+        WHEN 'captain' THEN 1
+        WHEN 'commander' THEN 2
+        WHEN 'entry' THEN 3
+        WHEN 'sniper' THEN 4
+        WHEN 'support' THEN 5
+        WHEN 'rifler' THEN 6
+        WHEN 'freeman' THEN 7
+        WHEN 'backup' THEN 8
+        WHEN 'member' THEN 9
+        ELSE 99
+      END
+  `).all(userId).map((item) => item.position);
+}
+
 export function toPublicUser(user) {
-  const position =
-    user.position ||
-    (user.role === "admin"
-      ? "captain"
-      : "member");
+  if (!user) {
+    return null;
+  }
+
+  const positions = getUserPositions(user.id);
+
+  const positionNames = positions.map(
+    (position) => POSITION_NAMES[position] || position
+  );
+
+  const nickname =
+    user.display_name ||
+    user.username ||
+    "";
 
   return {
     id: user.id,
 
-    nickname: user.username,
+    nickname,
+    displayName: nickname,
 
-    // 暂时保留 displayName，
-    // 避免已有频道代码需要全部修改
-    displayName:
-      user.display_name ||
-      user.username,
+    // 真正的账号权限
+    role: user.role,
 
-    role:
-      user.role === "admin"
-        ? "captain"
-        : "member",
+    isAdmin: user.role === "admin",
 
-    isCaptain:
-      user.role === "admin",
+    // 暂时保留，避免现有前端报错
+    isCaptain: user.role === "admin",
 
-    position,
+    isGuest: false,
 
+    // 新的多职位字段
+    positions,
+    positionNames,
+
+    // 暂时保留旧字段，兼容欢迎动画
+    position: positions[0] || "member",
     positionName:
-      POSITION_NAMES[position] ||
-      "队员",
+      positionNames[0] ||
+      POSITION_NAMES.member,
   };
 }
+
+
   
 
 /**
@@ -157,8 +191,7 @@ export function getCurrentUser(req) {
       users.id,
       users.username,
       users.display_name,
-      users.role,
-      users.position
+      users.role
 
     FROM sessions
 
