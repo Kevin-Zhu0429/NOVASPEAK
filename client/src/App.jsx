@@ -6,6 +6,8 @@ import TeamManagement from "./components/team/TeamManagement";
 import TeamMembers from "./components/team/TeamMembers";
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import VoiceRoom from "./components/voice/VoiceRoom";
+import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
+import usePresence from "./hooks/usePresence";
 import { getPositionText } from "./utils/user-display";
 import "./App.css";
 
@@ -29,6 +31,7 @@ export default function App() {
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
+  const presence = usePresence(currentUser, API_BASE);
 
   useEffect(() => {
   let cancelled = false;
@@ -138,6 +141,7 @@ export default function App() {
   }
 
   async function leaveCurrentChannel() {
+    presence.setLocation({ state: "lobby", channelId: null });
     setCurrentChannel(null);
     await fetchChannels();
   }
@@ -299,7 +303,7 @@ if (!currentUser) {
 
         <main className="chat-panel">
           {!currentChannel ? (
-            <div className="empty-state" />
+            <div className="lobby-content"><div className="empty-state" /><OnlineMembersPanel members={presence.members} connectionStatus={presence.connectionStatus} /></div>
           ) : (
             <VoiceRoom
               channel={currentChannel}
@@ -307,6 +311,9 @@ if (!currentUser) {
               apiBase={API_BASE}
               onLeave={leaveCurrentChannel}
               onChannelsChanged={fetchChannels}
+              onPresenceLocationChange={presence.setLocation}
+              onlineMembers={presence.members}
+              presenceStatus={presence.connectionStatus}
             />
           )}
         </main>

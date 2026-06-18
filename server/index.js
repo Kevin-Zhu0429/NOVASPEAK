@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
@@ -27,6 +28,7 @@ import {
   createGuestSession,
   destroyGuestSession,
 } from "./guest-auth.js";
+import { createPresenceService } from "./presence.js";
 
 dotenv.config();
 
@@ -1359,6 +1361,15 @@ app.use((req, res, next) => {
 });
 
 
-app.listen(process.env.PORT || 3001, () => {
+const server = createServer(app);
+const presence = createPresenceService();
+
+server.on("upgrade", (req, socket, head) => {
+  if (!presence.handleUpgrade(req, socket, head)) {
+    socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+  }
+});
+
+server.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
 });

@@ -231,6 +231,37 @@ export function getAuthenticatedUser(req) {
   return getGuestUser(req);
 }
 
+export function parseRequestCookies(req) {
+  if (req.cookies) {
+    return req.cookies;
+  }
+
+  const cookies = {};
+  const header = req.headers?.cookie;
+
+  if (typeof header === "string") {
+    for (const part of header.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 1) continue;
+      const name = part.slice(0, separator).trim();
+      const value = part.slice(separator + 1).trim();
+      try {
+        cookies[name] = decodeURIComponent(value);
+      } catch {
+        cookies[name] = value;
+      }
+    }
+  }
+
+  req.cookies = cookies;
+  return cookies;
+}
+
+export function resolveAuthenticatedIdentity(req) {
+  parseRequestCookies(req);
+  return getAuthenticatedUser(req);
+}
+
 /**
  * 删除当前浏览器会话。
  */
@@ -270,7 +301,7 @@ export function requireMember(
   res,
   next
 ) {
-  const user = getAuthenticatedUser(req);
+  const user = resolveAuthenticatedIdentity(req);
 
   if (!user) {
     return res.status(401).json({
