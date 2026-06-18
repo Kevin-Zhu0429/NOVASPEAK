@@ -775,7 +775,19 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
 
     if (typeof room !== "string" || !room.trim()) {
       return res.status(400).json({
-        error: "room is required",
+        error: "请选择有效的语音频道",
+      });
+    }
+
+    const channel = db.prepare(`
+      SELECT id
+      FROM channels
+      WHERE id = ?
+    `).get(room.trim());
+
+    if (!channel) {
+      return res.status(404).json({
+        error: "语音频道不存在",
       });
     }
 
@@ -792,12 +804,13 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
           role: user.role,
           isGuest: user.isGuest,
           positions: user.positions || [],
+          positionNames: user.positionNames || [],
         }),
       }
     );
 
     at.addGrant({
-      room,
+      room: channel.id,
       roomJoin: true,
       canPublish: true,
       canSubscribe: true,
