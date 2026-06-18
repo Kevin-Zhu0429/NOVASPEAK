@@ -3,8 +3,62 @@ import { ConnectionQuality } from "livekit-client";
 export const NETWORK_POLL_INTERVAL_MS = 2000;
 export const NETWORK_SMOOTHING_ALPHA = 0.3;
 
+function isAudioRtp(stat, knownAudioTrack = false) {
+  return stat?.kind === "audio" || stat?.mediaType === "audio" || (knownAudioTrack && !stat?.kind && !stat?.mediaType);
+}
+
+export function reportValues(report) {
+  return report ? Array.from(report.values?.() || report) : [];
+}
+
+export function findOutboundAudio(report) {
+  return reportValues(report).find((stat) => stat.type === "outbound-rtp" && isAudioRtp(stat, true)) || null;
+}
+
+export function findRemoteInboundAudio(report, outbound) {
+  if (!outbound) return null;
+  const candidates = reportValues(report).filter((stat) => stat.type === "remote-inbound-rtp" && isAudioRtp(stat, true));
+  return candidates.find((stat) => outbound.remoteId && stat.id === outbound.remoteId)
+    || candidates.find((stat) => stat.localId && stat.localId === outbound.id)
+    || candidates.find((stat) => Number.isFinite(outbound.ssrc) && Number(stat.ssrc) === Number(outbound.ssrc))
+    || (candidates.length === 1 ? candidates[0] : null);
+}
+
+export function readRtt(remoteInbound) {
+  const direct = Number(remoteInbound?.roundTripTime);
+  if (Number.isFinite(direct) && direct >= 0) return direct * 1000;
+  const total = Number(remoteInbound?.totalRoundTripTime);
+  const measurements = Number(remoteInbound?.roundTripTimeMeasurements);
+  return Number.isFinite(total) && total >= 0 && Number.isFinite(measurements) && measurements > 0
+    ? (total / measurements) * 1000
+    : null;
+}
+
+export function outboundLossSample(currentOutbound, previousOutbound, currentRemote, previousRemote) {
+  if (!currentOutbound || !previousOutbound || !currentRemote || !previousRemote) return null;
+  const sent = Number(currentOutbound.packetsSent);
+  const previousSent = Number(previousOutbound.packetsSent);
+  const lost = Number(currentRemote.packetsLost);
+  const previousLost = Number(previousRemote.packetsLost);
+  const timestamp = Number(currentOutbound.timestamp);
+  const previousTimestamp = Number(previousOutbound.timestamp);
+  if (![sent, previousSent, lost, previousLost, timestamp, previousTimestamp].every(Number.isFinite)) return null;
+  const sentDelta = sent - previousSent;
+  const rawLostDelta = lost - previousLost;
+  if (sentDelta < 0 || timestamp <= previousTimestamp) return null;
+  const lostDelta = Math.max(0, rawLostDelta);
+  const totalDelta = sentDelta + lostDelta;
+  if (totalDelta <= 0) return null;
+  return { loss: Math.min(100, (lostDelta / totalDelta) * 100), totalDelta };
+}
+
+export function findInboundAudio(report) {
+  return reportValues(report).find((stat) => stat.type === "inbound-rtp" && isAudioRtp(stat, true)) || null;
+}
+
 export function calculateLossSample(current, previous, packetField) {
   if (!current || !previous) return null;
+  if (current.packetsLost == null || previous.packetsLost == null) return null;
   const packets = Number(current[packetField]);
   const lost = Number(current.packetsLost);
   const timestamp = Number(current.timestamp);
@@ -14,10 +68,11 @@ export function calculateLossSample(current, previous, packetField) {
   if (![packets, lost, timestamp, previousPackets, previousLost, previousTimestamp].every(Number.isFinite)) return null;
   const packetDelta = packets - previousPackets;
   const lostDelta = lost - previousLost;
-  if (packetDelta < 0 || lostDelta < 0 || timestamp <= previousTimestamp) return null;
-  const totalDelta = packetDelta + lostDelta;
+  if (packetDelta < 0 || timestamp <= previousTimestamp) return null;
+  const safeLostDelta = Math.max(0, lostDelta);
+  const totalDelta = packetDelta + safeLostDelta;
   if (totalDelta <= 0) return null;
-  return { loss: Math.min(100, Math.max(0, (lostDelta / totalDelta) * 100)), totalDelta };
+  return { loss: Math.min(100, (safeLostDelta / totalDelta) * 100), totalDelta };
 }
 
 export function weightedLoss(samples) {
