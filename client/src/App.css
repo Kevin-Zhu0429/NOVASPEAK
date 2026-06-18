@@ -1933,7 +1933,8 @@ input {
 
 /* 频道内语音房间 */
 .voice-room { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; padding-bottom: 92px; }
-.voice-room-header { min-height: 104px; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid rgba(94, 234, 212, .14); background: rgba(5, 20, 27, .58); }
+.voice-room-header { min-height: 104px; padding: 18px 24px; display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 12px 20px; border-bottom: 1px solid rgba(94, 234, 212, .14); background: rgba(5, 20, 27, .58); }
+.voice-room-header > div:first-child { flex: 1 1 260px; min-width: 0; }
 .voice-eyebrow { color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: .2em; }
 .voice-room-header h1 { margin: 3px 0 4px; font-size: 24px; }
 .voice-status-stack { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -1977,10 +1978,10 @@ input {
 .audio-device-panel select { width: 100%; padding: 10px; border: 1px solid #334155; border-radius: 9px; color: white; background: #0f172a; }
 .device-unsupported, .device-error { color: #fbbf24; font-size: 12px; }
 .voice-remote-audio { display: none; }
-.network-stats { min-width: 360px; }
+.network-stats { flex: 0 1 360px; min-width: min(360px, 100%); max-width: 100%; }
 .network-stats summary { display: none; color: #99f6e4; cursor: pointer; }
-.network-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
-.network-stats-grid > span { min-width: 78px; padding: 8px 9px; display: grid; gap: 2px; border-radius: 9px; color: #d1fae5; background: rgba(15, 23, 42, .66); font-size: 13px; }
+.network-stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.network-stats-grid > span { min-width: 0; padding: 8px 9px; display: grid; gap: 2px; border-radius: 9px; color: #d1fae5; background: rgba(15, 23, 42, .66); font-size: 13px; }
 .network-stats-grid small { color: #64748b; font-size: 10px; }
 .network-stats-grid .poor { color: #fde68a; }
 .network-stats-grid .severe { color: #fca5a5; }
