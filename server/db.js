@@ -7,7 +7,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const dataDirectory = path.join(__dirname, "data");
-const databasePath = path.join(dataDirectory, "novaspeak.db");
+const databasePath = process.env.NOVASPEAK_DB_PATH
+  ? path.resolve(process.env.NOVASPEAK_DB_PATH)
+  : path.join(dataDirectory, "novaspeak.db");
+
+fs.mkdirSync(path.dirname(databasePath), {
+  recursive: true,
+});
 
 fs.mkdirSync(dataDirectory, {
   recursive: true,

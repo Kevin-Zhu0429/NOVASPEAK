@@ -17,6 +17,7 @@ import {
   destroyLoginSession,
   getAuthenticatedUser,
   getCurrentUser,
+  requireAdmin,
   requireAuthenticated,
   requireCaptain,
   requireMember,
@@ -97,6 +98,67 @@ const RESERVED_GUEST_NICKNAMES = new Set([
   "guest",
   "visitor",
 ]);
+
+const ACCOUNT_POSITIONS = new Set([
+  "captain",
+  "commander",
+  "entry",
+  "sniper",
+  "support",
+  "rifler",
+  "freeman",
+  "backup",
+  "member",
+]);
+
+function normalizeAccountNickname(value) {
+  if (typeof value !== "string") {
+    return {
+      error: "请输入新昵称",
+    };
+  }
+
+  const nickname = value.normalize("NFKC").trim();
+
+  if (nickname.length < 2 || nickname.length > 24) {
+    return {
+      error: "昵称必须为 2—24 个字符",
+    };
+  }
+
+  if (/[\u0000-\u001F\u007F]/.test(nickname)) {
+    return {
+      error: "昵称包含无效字符",
+    };
+  }
+
+  const nicknameKey = nickname.toLocaleLowerCase();
+
+  if (RESERVED_GUEST_NICKNAMES.has(nicknameKey)) {
+    return {
+      error: "该昵称为系统保留昵称，请更换昵称",
+    };
+  }
+
+  return {
+    nickname,
+    nicknameKey,
+  };
+}
+
+function getAccountUser(userId) {
+  return db.prepare(`
+    SELECT
+      id,
+      username,
+      username_key,
+      display_name,
+      password_hash,
+      role
+    FROM users
+    WHERE id = ?
+  `).get(userId);
+}
 
 function normalizeGuestNickname(value) {
   if (typeof value !== "string") {
@@ -308,6 +370,277 @@ app.post("/api/auth/logout",
 
       res.status(500).json({
         error: "退出登录失败",
+      });
+    }
+  }
+);
+
+app.get("/api/account/me",
+  requireRegistered,
+  (req, res) => {
+    try {
+      const user = getAccountUser(req.authUser.id);
+
+      if (!user) {
+        return res.status(401).json({
+          error: "正式成员账号不存在或已失效",
+        });
+      }
+
+      res.json({
+        user: toPublicUser(user),
+      });
+    } catch (error) {
+      console.error("Get account error:", error);
+      res.status(500).json({
+        error: "获取账号信息失败",
+      });
+    }
+  }
+);
+
+app.patch("/api/account/me",
+  requireRegistered,
+  async (req, res) => {
+    try {
+      const nicknameResult = normalizeAccountNickname(
+        req.body?.nickname
+      );
+      const currentPassword = req.body?.currentPassword;
+
+      if (nicknameResult.error) {
+        return res.status(400).json({
+          error: nicknameResult.error,
+        });
+      }
+
+      if (typeof currentPassword !== "string") {
+        return res.status(400).json({
+          error: "请输入当前密码",
+        });
+      }
+
+      const user = getAccountUser(req.authUser.id);
+
+      if (
+        !user ||
+        !(await verifyPassword(
+          currentPassword,
+          user.password_hash
+        ))
+      ) {
+        return res.status(401).json({
+          error: "当前密码错误",
+        });
+      }
+
+      const duplicateUser = db.prepare(`
+        SELECT id
+        FROM users
+        WHERE username_key = ? AND id <> ?
+      `).get(
+        nicknameResult.nicknameKey,
+        user.id
+      );
+
+      if (duplicateUser) {
+        return res.status(409).json({
+          error: "该昵称已被其他正式成员使用",
+        });
+      }
+
+      const updateNickname = db.transaction(() => {
+        db.prepare(`
+          UPDATE users
+          SET
+            username = ?,
+            username_key = ?,
+            display_name = ?
+          WHERE id = ?
+        `).run(
+          nicknameResult.nickname,
+          nicknameResult.nicknameKey,
+          nicknameResult.nickname,
+          user.id
+        );
+
+        return getAccountUser(user.id);
+      });
+
+      const updatedUser = updateNickname();
+
+      res.json({
+        success: true,
+        user: toPublicUser(updatedUser),
+      });
+    } catch (error) {
+      console.error("Update account nickname error:", error);
+
+      if (
+        error?.code === "SQLITE_CONSTRAINT_UNIQUE"
+      ) {
+        return res.status(409).json({
+          error: "该昵称已被其他正式成员使用",
+        });
+      }
+
+      res.status(500).json({
+        error: "修改昵称失败",
+      });
+    }
+  }
+);
+
+app.patch("/api/account/me/password",
+  requireRegistered,
+  async (req, res) => {
+    try {
+      const currentPassword = req.body?.currentPassword;
+      const newPassword = req.body?.newPassword;
+      const confirmPassword = req.body?.confirmPassword;
+
+      if (
+        typeof currentPassword !== "string" ||
+        typeof newPassword !== "string" ||
+        typeof confirmPassword !== "string"
+      ) {
+        return res.status(400).json({
+          error: "请完整填写密码信息",
+        });
+      }
+
+      if (newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({
+          error: "新密码必须为 8—128 位",
+        });
+      }
+
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+          error: "两次输入的新密码不一致",
+        });
+      }
+
+      const user = getAccountUser(req.authUser.id);
+      const currentPasswordIsValid =
+        user &&
+        await verifyPassword(
+          currentPassword,
+          user.password_hash
+        );
+
+      if (!currentPasswordIsValid) {
+        return res.status(401).json({
+          error: "当前密码错误",
+        });
+      }
+
+      if (
+        await verifyPassword(
+          newPassword,
+          user.password_hash
+        )
+      ) {
+        return res.status(400).json({
+          error: "新密码不能与当前密码相同",
+        });
+      }
+
+      const passwordHash = await hashPassword(newPassword);
+
+      db.prepare(`
+        UPDATE users
+        SET password_hash = ?
+        WHERE id = ?
+      `).run(passwordHash, user.id);
+
+      res.json({
+        success: true,
+        message: "密码修改成功",
+      });
+    } catch (error) {
+      console.error("Update account password error:", error);
+      res.status(500).json({
+        error: "修改密码失败",
+      });
+    }
+  }
+);
+
+app.put("/api/account/me/positions",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const requestedPositions = req.body?.positions;
+
+      if (!Array.isArray(requestedPositions)) {
+        return res.status(400).json({
+          error: "职位必须使用数组提交",
+        });
+      }
+
+      if (
+        requestedPositions.some(
+          (position) => typeof position !== "string"
+        )
+      ) {
+        return res.status(400).json({
+          error: "职位格式不正确",
+        });
+      }
+
+      const positions = [...new Set(requestedPositions)];
+
+      if (positions.length < 1) {
+        return res.status(400).json({
+          error: "至少需要保留一个职位",
+        });
+      }
+
+      const unknownPosition = positions.find(
+        (position) => !ACCOUNT_POSITIONS.has(position)
+      );
+
+      if (unknownPosition) {
+        return res.status(400).json({
+          error: "包含未知的战队职位",
+        });
+      }
+
+      const updatePositions = db.transaction(() => {
+        db.prepare(`
+          DELETE FROM user_positions
+          WHERE user_id = ?
+        `).run(req.authUser.id);
+
+        const insertPosition = db.prepare(`
+          INSERT INTO user_positions (
+            user_id,
+            position
+          )
+          VALUES (?, ?)
+        `);
+
+        for (const position of positions) {
+          insertPosition.run(
+            req.authUser.id,
+            position
+          );
+        }
+
+        return getAccountUser(req.authUser.id);
+      });
+
+      const updatedUser = updatePositions();
+
+      res.json({
+        success: true,
+        user: toPublicUser(updatedUser),
+      });
+    } catch (error) {
+      console.error("Update account positions error:", error);
+      res.status(500).json({
+        error: "修改职位失败",
       });
     }
   }

@@ -290,6 +290,12 @@ export function requireRegistered(req, res, next) {
   const user = getCurrentUser(req);
 
   if (!user) {
+    if (getGuestUser(req)) {
+      return res.status(403).json({
+        error: "该功能仅限正式战队成员",
+      });
+    }
+
     return res.status(401).json({
       error: "请先登录正式成员账号",
     });
@@ -326,5 +332,26 @@ export function requireCaptain(
 }
 
 export function requireAdmin(req, res, next) {
-  return requireCaptain(req, res, next);
+  const user = getCurrentUser(req);
+
+  if (!user) {
+    if (getGuestUser(req)) {
+      return res.status(403).json({
+        error: "该功能仅限管理员",
+      });
+    }
+
+    return res.status(401).json({
+      error: "请先登录正式成员账号",
+    });
+  }
+
+  if (user.role !== "admin") {
+    return res.status(403).json({
+      error: "只有管理员可以执行该操作",
+    });
+  }
+
+  req.authUser = user;
+  next();
 }

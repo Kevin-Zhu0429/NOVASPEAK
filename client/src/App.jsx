@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import ChannelList from "./components/ChannelList";
 import LoginScreen from "./components/auth/LoginScreen";
+import AccountSettings from "./components/account/AccountSettings";
 import TeamManagement from "./components/team/TeamManagement";
+import TeamMembers from "./components/team/TeamMembers";
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import "./App.css";
 
@@ -35,6 +37,8 @@ export default function App() {
   const audioElementsRef = useRef([]);
 
   const [showTeamManagement,setShowTeamManagement,] = useState(false);
+  const [showAccountSettings, setShowAccountSettings] = useState(false);
+  const [showTeamMembers, setShowTeamMembers] = useState(false);
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
 
@@ -440,6 +444,26 @@ if (!currentUser) {
           </div>
 
           <div className="sidebar-footer">
+            {!currentUser.isGuest && (
+              <button
+                type="button"
+                className="sidebar-account-action"
+                onClick={() => setShowAccountSettings(true)}
+              >
+                <span className="management-icon">◎</span>
+                我的账号
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="sidebar-account-action"
+              onClick={() => setShowTeamMembers(true)}
+            >
+              <span className="management-icon">◉</span>
+              战队成员
+            </button>
+
             {currentUser.role === "admin" && (
               <button
                 type="button"
@@ -481,9 +505,9 @@ if (!currentUser) {
                 type="button"
                 className="logout-button"
                 onClick={logout}
-                title="退出登录"
+                title={currentUser.isGuest ? "退出访客模式" : "退出登录"}
               >
-                退出
+                {currentUser.isGuest ? "退出访客模式" : "退出"}
               </button>
             </div>
           </div>
@@ -595,11 +619,26 @@ if (!currentUser) {
       )}
 
       {showTeamManagement &&
-        currentUser.isCaptain && (
+        currentUser.role === "admin" && (
           <TeamManagement
             onClose={() =>
               setShowTeamManagement(false)
           }
+        />
+      )}
+
+      {showAccountSettings &&
+        !currentUser.isGuest && (
+          <AccountSettings
+            currentUser={currentUser}
+            onUserUpdated={setCurrentUser}
+            onClose={() => setShowAccountSettings(false)}
+          />
+        )}
+
+      {showTeamMembers && (
+        <TeamMembers
+          onClose={() => setShowTeamMembers(false)}
         />
       )}
     </>
