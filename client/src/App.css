@@ -1533,3 +1533,44 @@ input {
     transform: translateY(0);
   }
 }
+.guest-login-panel {
+  margin-top: 14px;
+  padding: 14px;
+
+  border: 1px solid rgba(20, 184, 166, 0.22);
+  border-radius: 14px;
+
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.guest-login-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.guest-cancel-button,
+.guest-enter-button {
+  height: 42px;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.guest-cancel-button {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+}
+
+.guest-enter-button {
+  background: linear-gradient(135deg, #38bdf8, #0f766e);
+  color: white;
+}
+
+.guest-cancel-button:disabled,
+.guest-enter-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}

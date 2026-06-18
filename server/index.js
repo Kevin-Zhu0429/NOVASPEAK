@@ -13,12 +13,20 @@ import {
 } from "./auth-utils.js";
 import {
   createLoginSession,
+  destroyAllLoginSessions,
   destroyLoginSession,
+  getAuthenticatedUser,
   getCurrentUser,
+  requireAuthenticated,
   requireCaptain,
   requireMember,
+  requireRegistered,
   toPublicUser
 } from "./auth-session.js";
+import {
+  createGuestSession,
+  destroyGuestSession,
+} from "./guest-auth.js";
 
 dotenv.config();
 
@@ -78,6 +86,51 @@ function normalizeNickname(value) {
     .normalize("NFKC")
     .trim()
     .toLocaleLowerCase();
+}
+
+const RESERVED_GUEST_NICKNAMES = new Set([
+  "admin",
+  "administrator",
+  "system",
+  "novaspeak",
+  "novagaming",
+  "guest",
+  "visitor",
+]);
+
+function normalizeGuestNickname(value) {
+  if (typeof value !== "string") {
+    return {
+      error: "请输入访客昵称",
+    };
+  }
+
+  const nickname = value.normalize("NFKC").trim();
+
+  if (nickname.length < 2 || nickname.length > 24) {
+    return {
+      error: "访客昵称必须为 2—24 个字符",
+    };
+  }
+
+  if (/[\u0000-\u001F\u007F]/.test(nickname)) {
+    return {
+      error: "访客昵称包含无效字符",
+    };
+  }
+
+  const nicknameKey = nickname.toLocaleLowerCase();
+
+  if (RESERVED_GUEST_NICKNAMES.has(nicknameKey)) {
+    return {
+      error: "该昵称为系统保留昵称，请更换访客昵称",
+    };
+  }
+
+  return {
+    nickname,
+    nicknameKey,
+  };
 }
 
 
@@ -149,20 +202,10 @@ app.post("/api/auth/member-login",
         req,
         res
       );
-
-      const positionNames = {
-        captain: "队长",
-        commander: "指挥",
-        entry: "突破手",
-        sniper: "狙击手",
-        support: "辅助",
-        rifler: "步枪手",
-        freeman: "自由人",
-        backup: "替补",
-        member: "队员",
-      };
+      destroyGuestSession(req, res);
 
       res.json({
+        success: true,
         user: toPublicUser(user),
       });
     } catch (error) {
@@ -178,10 +221,60 @@ app.post("/api/auth/member-login",
   }
 );
 
+app.post("/api/auth/guest-login",
+  (req, res) => {
+    try {
+      const result = normalizeGuestNickname(
+        req.body?.nickname
+      );
+
+      if (result.error) {
+        return res.status(400).json({
+          error: result.error,
+        });
+      }
+
+      const existingUser = db.prepare(`
+        SELECT id
+        FROM users
+        WHERE username_key = ?
+      `).get(result.nicknameKey);
+
+      if (existingUser) {
+        return res.status(409).json({
+          error: "该昵称属于正式战队成员，请更换访客昵称",
+        });
+      }
+
+      destroyLoginSession(req, res);
+
+      const user = createGuestSession(
+        result.nickname,
+        req,
+        res
+      );
+
+      res.json({
+        success: true,
+        user,
+      });
+    } catch (error) {
+      console.error(
+        "Guest login error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "访客登录失败，请稍后重试",
+      });
+    }
+  }
+);
+
 app.get("/api/auth/me",
   (req, res) => {
     try {
-      const user = getCurrentUser(req);
+      const user = getAuthenticatedUser(req);
 
       res.json({
         user,
@@ -202,7 +295,7 @@ app.get("/api/auth/me",
 app.post("/api/auth/logout",
   (req, res) => {
     try {
-      destroyLoginSession(req, res);
+      destroyAllLoginSessions(req, res);
 
       res.json({
         success: true,
@@ -220,7 +313,7 @@ app.post("/api/auth/logout",
   }
 );
 
-app.get("/api/channels", async (req, res) => {
+app.get("/api/channels", requireAuthenticated, async (req, res) => {
   try {
     const channels = db
       .prepare(`
@@ -253,7 +346,7 @@ app.get("/api/channels", async (req, res) => {
   }
 });
 
-app.post("/api/channels", (req, res) => {
+app.post("/api/channels", requireRegistered, (req, res) => {
   try {
     const rawName = req.body?.name;
 
@@ -334,21 +427,30 @@ app.post("/api/channels", (req, res) => {
   }
 });
 
-app.get("/api/token", async (req, res) => {
+app.get("/api/token", requireAuthenticated, async (req, res) => {
   try {
-    const { room, username } = req.query;
+    const { room } = req.query;
 
-    if (!room || !username) {
+    if (typeof room !== "string" || !room.trim()) {
       return res.status(400).json({
-        error: "room and username are required",
+        error: "room is required",
       });
     }
+
+    const user = req.authUser;
 
     const at = new AccessToken(
       process.env.LIVEKIT_API_KEY,
       process.env.LIVEKIT_API_SECRET,
       {
-        identity: username,
+        identity: user.id,
+        name: user.displayName,
+        metadata: JSON.stringify({
+          displayName: user.displayName,
+          role: user.role,
+          isGuest: user.isGuest,
+          positions: user.positions || [],
+        }),
       }
     );
 
@@ -374,6 +476,54 @@ app.get("/api/token", async (req, res) => {
     });
   }
 });
+
+app.get("/api/team/public-members",
+  requireAuthenticated,
+  (req, res) => {
+    try {
+      const members = db.prepare(`
+        SELECT
+          id,
+          username,
+          COALESCE(display_name, username) AS display_name,
+          role
+        FROM users
+        ORDER BY
+          CASE
+            WHEN role = 'admin' THEN 0
+            ELSE 1
+          END,
+          created_at ASC
+      `).all();
+
+      res.json({
+        members: members.map((member) => {
+          const publicUser = toPublicUser(member);
+
+          return {
+            id: publicUser.id,
+            nickname: publicUser.nickname,
+            displayName: publicUser.displayName,
+            role: publicUser.role,
+            positions: publicUser.positions,
+            positionNames: publicUser.positionNames,
+            position: publicUser.position,
+            positionName: publicUser.positionName,
+          };
+        }),
+      });
+    } catch (error) {
+      console.error(
+        "Get public team members error:",
+        error
+      );
+
+      res.status(500).json({
+        error: "获取公开战队成员失败",
+      });
+    }
+  }
+);
 
 app.get("/api/team/members",
   requireCaptain,
