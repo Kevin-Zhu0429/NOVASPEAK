@@ -1979,7 +1979,9 @@ input {
 .device-unsupported, .device-error { color: #fbbf24; font-size: 12px; }
 .voice-remote-audio { display: none; }
 .network-stats { flex: 0 1 360px; min-width: min(360px, 100%); max-width: 100%; }
-.network-stats summary { display: none; color: #99f6e4; cursor: pointer; }
+.network-stats-desktop { display: block; }
+.network-stats-compact { display: none; }
+.network-stats-compact summary { color: #99f6e4; cursor: pointer; }
 .network-stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .network-stats-grid > span { min-width: 0; padding: 8px 9px; display: grid; gap: 2px; border-radius: 9px; color: #d1fae5; background: rgba(15, 23, 42, .66); font-size: 13px; }
 .network-stats-grid small { color: #64748b; font-size: 10px; }
@@ -1990,9 +1992,9 @@ input {
 @media (max-width: 1000px) {
   .voice-participants-panel { width: 270px; flex-basis: 270px; }
   .network-stats { min-width: 0; }
-  .network-stats summary { display: block; }
-  .network-stats:not([open]) .network-stats-grid { display: none; }
-  .network-stats-grid { position: absolute; z-index: 5; top: 78px; right: 18px; padding: 8px; border-radius: 12px; background: #071923; }
+  .network-stats-desktop { display: none; }
+  .network-stats-compact { display: block; }
+  .network-stats-compact .network-stats-grid { position: absolute; z-index: 5; top: 78px; right: 18px; padding: 8px; border-radius: 12px; background: #071923; }
 }
 @media (max-width: 760px) {
   .main-layout { height: 100dvh; }
