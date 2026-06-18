@@ -346,6 +346,7 @@ export default function LoginScreen({ onLogin }) {
                     : "进入 NovaSpeak"}
                 </button>
               </div>
+
             </div>
           )}
         </form>
