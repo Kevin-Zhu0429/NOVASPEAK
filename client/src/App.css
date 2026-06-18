@@ -1401,6 +1401,128 @@ input {
   color: #fde68a;
 }
 
+.member-edit-button {
+  padding: 6px 10px;
+  border: 1px solid rgba(94, 234, 212, 0.28);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.16);
+  color: #99f6e4;
+  font-size: 12px;
+}
+
+.management-global-message {
+  margin: 0 24px 22px;
+}
+
+.member-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(2, 6, 23, 0.76);
+}
+
+.member-editor {
+  width: min(520px, 100%);
+  height: 100%;
+  padding: 24px;
+  overflow-y: auto;
+  border-left: 1px solid rgba(94, 234, 212, 0.2);
+  background: linear-gradient(160deg, #031219, #071f25);
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.45);
+}
+
+.member-editor > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.member-editor > header span,
+.member-editor > header p,
+.editor-section > p {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.member-editor > header h3 {
+  margin: 5px 0;
+  color: white;
+}
+
+.member-editor > header button {
+  padding: 4px 9px;
+  color: #cbd5e1;
+  font-size: 24px;
+}
+
+.editor-section {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(2, 12, 18, 0.58);
+}
+
+.editor-section h4 {
+  margin: 0 0 12px;
+  color: white;
+}
+
+.editor-section label {
+  display: block;
+  margin: 12px 0;
+}
+
+.editor-section label span {
+  display: block;
+  margin-bottom: 7px;
+  color: #d1fae5;
+  font-size: 12px;
+}
+
+.editor-section input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 9px;
+  background: rgba(2, 12, 18, 0.78);
+  color: white;
+}
+
+.editor-section > button,
+.delete-confirm button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #14b8a6, #0f766e);
+  color: white;
+}
+
+.danger-zone {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(69, 10, 10, 0.2);
+}
+
+.danger-zone .danger-button {
+  background: linear-gradient(135deg, #dc2626, #991b1b);
+}
+
+.delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.delete-confirm p {
+  width: 100%;
+  color: #fecaca;
+  font-size: 13px;
+}
+
 .create-member-form label {
   display: block;
   margin-bottom: 14px;

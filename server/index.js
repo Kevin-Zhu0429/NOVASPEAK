@@ -19,7 +19,6 @@ import {
   getCurrentUser,
   requireAdmin,
   requireAuthenticated,
-  requireCaptain,
   requireMember,
   requireRegistered,
   toPublicUser
@@ -154,10 +153,20 @@ function getAccountUser(userId) {
       username_key,
       display_name,
       password_hash,
-      role
+      role,
+      created_at
     FROM users
     WHERE id = ?
   `).get(userId);
+}
+
+function toManagedMember(user) {
+  const publicUser = toPublicUser(user);
+
+  return {
+    ...publicUser,
+    createdAt: user.created_at,
+  };
 }
 
 function normalizeGuestNickname(value) {
@@ -859,17 +868,16 @@ app.get("/api/team/public-members",
 );
 
 app.get("/api/team/members",
-  requireCaptain,
+  requireAdmin,
   (req, res) => {
     try {
       const members = db.prepare(`
         SELECT
           id,
-          username AS memberId,
-          COALESCE(display_name, username) AS displayName,
+          username,
+          display_name,
           role,
-          position,
-          created_at AS createdAt
+          created_at
         FROM users
         ORDER BY
           CASE
@@ -879,47 +887,8 @@ app.get("/api/team/members",
           created_at ASC
       `).all();
 
-      const positionNames = {
-        captain: "队长",
-        commander: "指挥",
-        entry: "突破手",
-        sniper: "狙击手",
-        member: "队员",
-        rifler: "步枪手",
-        support: "辅助",
-        freeman: "自由人",
-        backup: "替补",
-      };
-
       res.json({
-        members: members.map((member) => ({
-          id: member.id,
-
-          nickname:
-            member.nickname,
-
-          displayName:
-            member.displayName,
-
-          role:
-            member.role === "admin"
-              ? "captain"
-              : "member",
-
-          isCaptain:
-            member.role === "admin",
-
-          position:
-            member.position,
-
-          positionName:
-            positionNames[
-              member.position
-            ] || "队员",
-
-          createdAt:
-            member.createdAt,
-        })),
+        members: members.map(toManagedMember),
       });
     } catch (error) {
       console.error(
@@ -935,7 +904,7 @@ app.get("/api/team/members",
 );
 
 app.post("/api/team/members",
-  requireCaptain,
+  requireAdmin,
   async (req, res) => {
     try {
       const rawNickname = req.body?.nickname;
@@ -955,20 +924,12 @@ app.post("/api/team/members",
         });
       }
 
-      const nickname = rawNickname
-        .normalize("NFKC")
-        .trim();
+      const nicknameResult =
+        normalizeAccountNickname(rawNickname);
 
-      if (
-        nickname.length < 1 ||
-        nickname.length > 30 ||
-        /[\u0000-\u001F\u007F]/.test(
-          nickname
-        )
-      ) {
+      if (nicknameResult.error) {
         return res.status(400).json({
-          error:
-            "游戏昵称必须为 1—30 个有效字符",
+          error: nicknameResult.error,
         });
       }
 
@@ -992,16 +953,6 @@ app.post("/api/team/members",
       }
 
       if (
-        nickname.length < 1 ||
-        nickname.length > 30 ||
-        /[\u0000-\u001F\u007F]/.test(nickname)
-      ) {
-        return res.status(400).json({
-          error: "游戏昵称必须为 1—30 个有效字符",
-        });
-      }
-
-      if (
         password.length < 8 ||
         password.length > 128
       ) {
@@ -1011,7 +962,8 @@ app.post("/api/team/members",
         });
       }
 
-      const usernameKey = normalizeNickname(nickname);
+      const nickname = nicknameResult.nickname;
+      const usernameKey = nicknameResult.nicknameKey;
 
       const existingUser = db.prepare(`
         SELECT id
@@ -1041,51 +993,43 @@ app.post("/api/team/members",
         createdAt: Date.now(),
       };
 
-      db.prepare(`
-        INSERT INTO users (
-          id,
-          username,
-          username_key,
-          display_name,
-          password_hash,
-          role,
-          position,
-          created_at
-        )
-        VALUES (
-          @id,
-          @username,
-          @usernameKey,
-          @displayName,
-          @passwordHash,
-          'member',
-          @position,
-          @createdAt
-        )
-      `).run(newUser);
+      const createMember = db.transaction(() => {
+        db.prepare(`
+          INSERT INTO users (
+            id,
+            username,
+            username_key,
+            display_name,
+            password_hash,
+            role,
+            position,
+            created_at
+          )
+          VALUES (
+            @id,
+            @username,
+            @usernameKey,
+            @displayName,
+            @passwordHash,
+            'member',
+            @position,
+            @createdAt
+          )
+        `).run(newUser);
+
+        db.prepare(`
+          INSERT INTO user_positions (user_id, position)
+          VALUES (?, ?)
+        `).run(newUser.id, newUser.position);
+
+        return getAccountUser(newUser.id);
+      });
+
+      const createdUser = createMember();
 
       res.status(201).json({
-        member: {
-          id: newUser.id,
-          memberId: newUser.username,
-          displayName:
-            newUser.displayName,
-          role: "member",
-          isCaptain: false,
-          position: newUser.position,
-          positionName: {
-            commander: "指挥",
-            entry: "突破手",
-            sniper: "狙击手",
-            support: "辅助",
-            rifler: "步枪手",
-            freeman: "自由人",
-            backup: "替补",
-            member: "队员",
-          }[newUser.position],
-          createdAt:
-            newUser.createdAt,
-        },
+        success: true,
+        member: toManagedMember(createdUser),
       });
     } catch (error) {
       console.error(
@@ -1104,6 +1048,275 @@ app.post("/api/team/members",
 
       res.status(500).json({
         error: "创建战队成员失败",
+      });
+    }
+  }
+);
+
+app.patch("/api/admin/members/:memberId",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const member = getAccountUser(req.params.memberId);
+
+      if (!member) {
+        return res.status(404).json({
+          error: "正式成员不存在",
+        });
+      }
+
+      const nicknameResult = normalizeAccountNickname(
+        req.body?.nickname
+      );
+
+      if (nicknameResult.error) {
+        return res.status(400).json({
+          error: nicknameResult.error,
+        });
+      }
+
+      const duplicateUser = db.prepare(`
+        SELECT id
+        FROM users
+        WHERE username_key = ? AND id <> ?
+      `).get(nicknameResult.nicknameKey, member.id);
+
+      if (duplicateUser) {
+        return res.status(409).json({
+          error: "该昵称已被其他正式成员使用",
+        });
+      }
+
+      const updateMember = db.transaction(() => {
+        db.prepare(`
+          UPDATE users
+          SET username = ?, username_key = ?, display_name = ?
+          WHERE id = ?
+        `).run(
+          nicknameResult.nickname,
+          nicknameResult.nicknameKey,
+          nicknameResult.nickname,
+          member.id
+        );
+
+        return getAccountUser(member.id);
+      });
+
+      res.json({
+        success: true,
+        member: toManagedMember(updateMember()),
+      });
+    } catch (error) {
+      console.error("Admin update member error:", error);
+
+      if (error?.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return res.status(409).json({
+          error: "该昵称已被其他正式成员使用",
+        });
+      }
+
+      res.status(500).json({
+        error: "修改成员昵称失败",
+      });
+    }
+  }
+);
+
+app.put("/api/admin/members/:memberId/positions",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const member = getAccountUser(req.params.memberId);
+
+      if (!member) {
+        return res.status(404).json({
+          error: "正式成员不存在",
+        });
+      }
+
+      const requestedPositions = req.body?.positions;
+
+      if (!Array.isArray(requestedPositions)) {
+        return res.status(400).json({
+          error: "职位必须使用数组提交",
+        });
+      }
+
+      if (requestedPositions.some(
+        (position) => typeof position !== "string"
+      )) {
+        return res.status(400).json({
+          error: "职位格式不正确",
+        });
+      }
+
+      const positions = [...new Set(requestedPositions)];
+
+      if (positions.length === 0) {
+        return res.status(400).json({
+          error: "至少需要保留一个职位",
+        });
+      }
+
+      if (positions.some(
+        (position) => !ACCOUNT_POSITIONS.has(position)
+      )) {
+        return res.status(400).json({
+          error: "包含未知的战队职位",
+        });
+      }
+
+      const updatePositions = db.transaction(() => {
+        db.prepare(`
+          DELETE FROM user_positions WHERE user_id = ?
+        `).run(member.id);
+
+        const insertPosition = db.prepare(`
+          INSERT INTO user_positions (user_id, position)
+          VALUES (?, ?)
+        `);
+
+        for (const position of positions) {
+          insertPosition.run(member.id, position);
+        }
+
+        return getAccountUser(member.id);
+      });
+
+      res.json({
+        success: true,
+        member: toManagedMember(updatePositions()),
+      });
+    } catch (error) {
+      console.error("Admin update member positions error:", error);
+      res.status(500).json({
+        error: "修改成员职位失败",
+      });
+    }
+  }
+);
+
+app.post("/api/admin/members/:memberId/reset-password",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const member = getAccountUser(req.params.memberId);
+
+      if (!member) {
+        return res.status(404).json({
+          error: "正式成员不存在",
+        });
+      }
+
+      if (member.id === req.authUser.id) {
+        return res.status(400).json({
+          error: "请在“我的账号”中修改自己的密码",
+        });
+      }
+
+      const newPassword = req.body?.newPassword;
+      const confirmPassword = req.body?.confirmPassword;
+
+      if (
+        typeof newPassword !== "string" ||
+        typeof confirmPassword !== "string"
+      ) {
+        return res.status(400).json({
+          error: "请完整填写新密码",
+        });
+      }
+
+      if (newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({
+          error: "新密码必须为 8—128 位",
+        });
+      }
+
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+          error: "两次输入的新密码不一致",
+        });
+      }
+
+      const passwordHash = await hashPassword(newPassword);
+      const resetPassword = db.transaction(() => {
+        db.prepare(`
+          UPDATE users SET password_hash = ? WHERE id = ?
+        `).run(passwordHash, member.id);
+        db.prepare(`
+          DELETE FROM sessions WHERE user_id = ?
+        `).run(member.id);
+      });
+
+      resetPassword();
+
+      res.json({
+        success: true,
+        message: "密码已重置，目标成员的现有登录会话已失效",
+      });
+    } catch (error) {
+      console.error("Admin reset member password error:", error);
+      res.status(500).json({
+        error: "重置成员密码失败",
+      });
+    }
+  }
+);
+
+app.delete("/api/admin/members/:memberId",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const member = getAccountUser(req.params.memberId);
+
+      if (!member) {
+        return res.status(404).json({
+          error: "正式成员不存在",
+        });
+      }
+
+      if (member.id === req.authUser.id) {
+        return res.status(400).json({
+          error: "不能删除当前正在操作的管理员账号",
+        });
+      }
+
+      if (member.role === "admin") {
+        const adminCount = db.prepare(`
+          SELECT COUNT(*) AS count
+          FROM users
+          WHERE role = 'admin'
+        `).get().count;
+
+        if (adminCount <= 1) {
+          return res.status(409).json({
+            error: "系统必须至少保留一个管理员",
+          });
+        }
+      }
+
+      const deleteMember = db.transaction(() => {
+        db.prepare(`
+          DELETE FROM sessions WHERE user_id = ?
+        `).run(member.id);
+        db.prepare(`
+          DELETE FROM user_positions WHERE user_id = ?
+        `).run(member.id);
+        db.prepare(`
+          DELETE FROM users WHERE id = ?
+        `).run(member.id);
+      });
+
+      deleteMember();
+
+      res.json({
+        success: true,
+        message: `成员 ${member.display_name || member.username} 已删除`,
+      });
+    } catch (error) {
+      console.error("Admin delete member error:", error);
+      res.status(500).json({
+        error: "删除成员失败",
       });
     }
   }

@@ -1,7 +1,11 @@
+import { getPositionText } from "../../utils/user-display";
+
 export default function WelcomeOverlay({
   user,
 }) {
   if (!user) return null;
+
+  const positionText = getPositionText(user);
 
   return (
     <div className="welcome-overlay">
@@ -24,7 +28,7 @@ export default function WelcomeOverlay({
 
         <div className="welcome-identity">
           <span>
-            {user.positionName}
+            {positionText}
           </span>
 
           <strong>

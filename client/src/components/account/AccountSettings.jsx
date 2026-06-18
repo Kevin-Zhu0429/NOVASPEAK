@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getPositionText } from "../../utils/user-display";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -236,8 +237,7 @@ export default function AccountSettings({
 
   const roleName =
     accountUser?.role === "admin" ? "管理员" : "战队成员";
-  const positionSummary =
-    accountUser?.positionNames?.join(" · ") || "暂未设置职位";
+  const positionSummary = getPositionText(accountUser);
 
   return (
     <div className="account-settings-overlay" role="dialog" aria-modal="true">
