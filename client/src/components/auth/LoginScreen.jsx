@@ -1,4 +1,8 @@
-import { useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE || "";
@@ -7,9 +11,23 @@ export default function LoginScreen({ onLogin }) {
   const [nickname, setNickname] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [showGuestNotice, setShowGuestNotice] =
+  const [guestLoading, setGuestLoading] =
     useState(false);
+  const [error, setError] = useState("");
+  const [showGuestLogin, setShowGuestLogin] =
+    useState(false);
+  const [guestNickname, setGuestNickname] =
+    useState("");
+
+  const guestNicknameInputRef = useRef(null);
+
+  useEffect(() => {
+    if (showGuestLogin) {
+      window.setTimeout(() => {
+        guestNicknameInputRef.current?.focus();
+      }, 0);
+    }
+  }, [showGuestLogin]);
 
   async function handleMemberLogin(event) {
     event.preventDefault();
@@ -98,6 +116,83 @@ export default function LoginScreen({ onLogin }) {
     }
   }
 
+  async function handleGuestLogin(event) {
+    event.preventDefault();
+
+    const cleanNickname =
+      typeof guestNickname === "string"
+        ? guestNickname.normalize("NFKC").trim()
+        : "";
+
+    if (!cleanNickname) {
+      setError("请输入访客昵称");
+      return;
+    }
+
+    try {
+      setGuestLoading(true);
+      setError("");
+
+      const response = await fetch(
+        `${API_BASE}/api/auth/guest-login`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify({
+            nickname: cleanNickname,
+          }),
+        }
+      );
+
+      const contentType =
+        response.headers.get("content-type") || "";
+
+      if (!contentType.includes("application/json")) {
+        const text = await response.text();
+
+        console.error(
+          "访客登录接口没有返回 JSON：",
+          text
+        );
+
+        throw new Error(
+          "服务器访客登录接口返回异常"
+        );
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "访客登录失败"
+        );
+      }
+
+      if (!data.user) {
+        throw new Error(
+          "服务器没有返回访客信息"
+        );
+      }
+
+      onLogin(data.user);
+    } catch (loginError) {
+      console.error(
+        "NovaSpeak 访客登录失败：",
+        loginError
+      );
+
+      setError(
+        loginError.message ||
+          "访客登录失败，请稍后重试"
+      );
+    } finally {
+      setGuestLoading(false);
+    }
+  }
+
   return (
     <div className="nova-login-page">
       <div className="nova-login-container">
@@ -115,7 +210,11 @@ export default function LoginScreen({ onLogin }) {
 
         <form
           className="nova-member-login-card"
-          onSubmit={handleMemberLogin}
+          onSubmit={
+            showGuestLogin
+              ? handleGuestLogin
+              : handleMemberLogin
+          }
         >
           <div className="nova-team-name">
             NOVA GAMING
@@ -187,18 +286,66 @@ export default function LoginScreen({ onLogin }) {
           <button
             type="button"
             className="guest-login-button"
-            onClick={() =>
-              setShowGuestNotice(
-                (current) => !current
-              )
-            }
+            onClick={() => {
+              setError("");
+              setShowGuestLogin(true);
+            }}
+            disabled={loading || guestLoading}
           >
-            访客登录
+            访客进入
           </button>
 
-          {showGuestNotice && (
-            <div className="guest-notice">
-              访客登录功能暂未开放。
+          {showGuestLogin && (
+            <div
+              className="guest-login-panel"
+              role="dialog"
+              aria-label="访客临时登录"
+            >
+              <label className="login-field">
+                <span>临时昵称</span>
+
+                <input
+                  ref={guestNicknameInputRef}
+                  type="text"
+                  value={guestNickname}
+                  onChange={(event) =>
+                    setGuestNickname(event.target.value)
+                  }
+                  placeholder="例如：临时访客01"
+                  autoComplete="off"
+                  maxLength={24}
+                  disabled={guestLoading}
+                />
+              </label>
+
+              <div className="guest-notice">
+                访客可查看频道、加入语音和使用基础聊天；频道和战队管理仅限正式成员。
+              </div>
+
+              <div className="guest-login-actions">
+                <button
+                  type="button"
+                  className="guest-cancel-button"
+                  onClick={() => {
+                    setShowGuestLogin(false);
+                    setGuestNickname("");
+                    setError("");
+                  }}
+                  disabled={guestLoading}
+                >
+                  取消
+                </button>
+
+                <button
+                  type="submit"
+                  className="guest-enter-button"
+                  disabled={guestLoading}
+                >
+                  {guestLoading
+                    ? "正在进入..."
+                    : "进入 NovaSpeak"}
+                </button>
+              </div>
             </div>
           )}
         </form>

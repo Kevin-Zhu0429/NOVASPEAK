@@ -4,6 +4,10 @@ import {
   createSessionToken,
   hashSessionToken,
 } from "./auth-utils.js";
+import {
+  destroyGuestSession,
+  getGuestUser,
+} from "./guest-auth.js";
 
 export const SESSION_COOKIE_NAME = "novaspeak_session";
 
@@ -217,6 +221,16 @@ export function getCurrentUser(req) {
   return toPublicUser(session);
 }
 
+export function getAuthenticatedUser(req) {
+  const registeredUser = getCurrentUser(req);
+
+  if (registeredUser) {
+    return registeredUser;
+  }
+
+  return getGuestUser(req);
+}
+
 /**
  * 删除当前浏览器会话。
  */
@@ -243,6 +257,11 @@ export function destroyLoginSession(
   );
 }
 
+export function destroyAllLoginSessions(req, res) {
+  destroyLoginSession(req, res);
+  destroyGuestSession(req, res);
+}
+
 /**
  * 后续保护接口时使用。
  */
@@ -251,11 +270,28 @@ export function requireMember(
   res,
   next
 ) {
-  const user = getCurrentUser(req);
+  const user = getAuthenticatedUser(req);
 
   if (!user) {
     return res.status(401).json({
       error: "请先登录",
+    });
+  }
+
+  req.authUser = user;
+  next();
+}
+
+export function requireAuthenticated(req, res, next) {
+  return requireMember(req, res, next);
+}
+
+export function requireRegistered(req, res, next) {
+  const user = getCurrentUser(req);
+
+  if (!user) {
+    return res.status(401).json({
+      error: "请先登录正式成员账号",
     });
   }
 
@@ -279,12 +315,16 @@ export function requireCaptain(
     });
   }
 
-  if (!user.isCaptain) {
+  if (user.role !== "admin") {
     return res.status(403).json({
-      error: "只有队长可以执行该操作",
+      error: "只有管理员可以执行该操作",
     });
   }
 
   req.authUser = user;
   next();
+}
+
+export function requireAdmin(req, res, next) {
+  return requireCaptain(req, res, next);
 }
