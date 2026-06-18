@@ -6,6 +6,7 @@ import AccountSettings from "./components/account/AccountSettings";
 import TeamManagement from "./components/team/TeamManagement";
 import TeamMembers from "./components/team/TeamMembers";
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
+import { getPositionText } from "./utils/user-display";
 import "./App.css";
 
 
@@ -39,6 +40,7 @@ export default function App() {
   const [showTeamManagement,setShowTeamManagement,] = useState(false);
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [showTeamMembers, setShowTeamMembers] = useState(false);
+  const [teamMembersRevision, setTeamMembersRevision] = useState(0);
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
 
@@ -493,11 +495,7 @@ if (!currentUser) {
                 </strong>
 
                 <span>
-                  {currentUser.isCaptain
-                    ? "NOVA 队长"
-                    : currentUser.isGuest
-                      ? "访客"
-                      : "NOVA 战队成员"}
+                  {getPositionText(currentUser)}
                 </span>
               </div>
 
@@ -621,6 +619,11 @@ if (!currentUser) {
       {showTeamManagement &&
         currentUser.role === "admin" && (
           <TeamManagement
+            currentUser={currentUser}
+            onUserUpdated={setCurrentUser}
+            onMembersChanged={() =>
+              setTeamMembersRevision((revision) => revision + 1)
+            }
             onClose={() =>
               setShowTeamManagement(false)
           }
@@ -638,6 +641,7 @@ if (!currentUser) {
 
       {showTeamMembers && (
         <TeamMembers
+          key={teamMembersRevision}
           onClose={() => setShowTeamMembers(false)}
         />
       )}

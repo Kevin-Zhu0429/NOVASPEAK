@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getPositionText } from "../../utils/user-display";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -84,7 +85,7 @@ export default function TeamMembers({ onClose }) {
                   <div className="member-information">
                     <strong>{member.displayName}</strong>
                     <span>
-                      {member.positionNames?.join(" · ") || "暂未设置职位"}
+                      {getPositionText(member)}
                     </span>
                   </div>
                   <div className={member.role === "admin" ? "member-role captain" : "member-role"}>
