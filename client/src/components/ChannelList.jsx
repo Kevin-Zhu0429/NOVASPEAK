@@ -19,9 +19,11 @@ export default function ChannelList({
       <div className="channel-section-header">
         <div className="section-title">语音频道</div>
 
-        <button className="create-channel-btn" onClick={handleCreateChannel}>
-          +
-        </button>
+        {typeof onCreateChannel === "function" && (
+          <button className="create-channel-btn" onClick={handleCreateChannel}>
+            +
+          </button>
+        )}
       </div>
 
       <div className="channel-list">

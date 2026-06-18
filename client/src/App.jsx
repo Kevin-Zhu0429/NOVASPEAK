@@ -16,6 +16,9 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
 
   const username = currentUser?.displayName || "";
+  const canManageChannels =
+    currentUser?.role === "admin" ||
+    currentUser?.role === "member";
 
   const [channels, setChannels] = useState([]);
   const [currentChannel, setCurrentChannel] = useState(null);
@@ -96,7 +99,12 @@ export default function App() {
 
   async function fetchChannels() {
     try {
-      const response = await fetch( `${API_BASE}/api/channels`);
+      const response = await fetch(
+        `${API_BASE}/api/channels`,
+        {
+          credentials: "include",
+        }
+      );
       const data = await response.json();
 
       if (!response.ok) {
@@ -116,6 +124,7 @@ export default function App() {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include",
         body: JSON.stringify({ name }),
       });
 
@@ -250,12 +259,14 @@ export default function App() {
 
       const tokenUrl =
         `${API_BASE}/api/token` +
-        `?room=${encodeURIComponent(channel.id)}` +
-        `&username=${encodeURIComponent(
-          currentUser.displayName
-        )}`;
+        `?room=${encodeURIComponent(channel.id)}`;
 
-      const response = await fetch(tokenUrl);
+      const response = await fetch(
+        tokenUrl,
+        {
+          credentials: "include",
+        }
+      );
       const data = await response.json();
 
       if (!response.ok) {
@@ -420,12 +431,16 @@ if (!currentUser) {
               channels={channels}
               currentChannel={currentChannel}
               onJoinChannel={joinChannel}
-              onCreateChannel={createChannel}
+              onCreateChannel={
+                canManageChannels
+                  ? createChannel
+                  : null
+              }
             />
           </div>
 
           <div className="sidebar-footer">
-            {currentUser.isCaptain && (
+            {currentUser.role === "admin" && (
               <button
                 type="button"
                 className="team-management-button"
@@ -456,7 +471,9 @@ if (!currentUser) {
                 <span>
                   {currentUser.isCaptain
                     ? "NOVA 队长"
-                    : "NOVA 战队成员"}
+                    : currentUser.isGuest
+                      ? "访客"
+                      : "NOVA 战队成员"}
                 </span>
               </div>
 
