@@ -210,7 +210,11 @@ export default function LoginScreen({ onLogin }) {
 
         <form
           className="nova-member-login-card"
-          onSubmit={handleMemberLogin}
+          onSubmit={
+            showGuestLogin
+              ? handleGuestLogin
+              : handleMemberLogin
+          }
         >
           <div className="nova-team-name">
             NOVA GAMING
@@ -297,53 +301,52 @@ export default function LoginScreen({ onLogin }) {
               role="dialog"
               aria-label="访客临时登录"
             >
-              <form onSubmit={handleGuestLogin}>
-                <label className="login-field">
-                  <span>临时昵称</span>
+              <label className="login-field">
+                <span>临时昵称</span>
 
-                  <input
-                    ref={guestNicknameInputRef}
-                    type="text"
-                    value={guestNickname}
-                    onChange={(event) =>
-                      setGuestNickname(event.target.value)
-                    }
-                    placeholder="例如：临时访客01"
-                    autoComplete="off"
-                    maxLength={24}
-                    disabled={guestLoading}
-                  />
-                </label>
+                <input
+                  ref={guestNicknameInputRef}
+                  type="text"
+                  value={guestNickname}
+                  onChange={(event) =>
+                    setGuestNickname(event.target.value)
+                  }
+                  placeholder="例如：临时访客01"
+                  autoComplete="off"
+                  maxLength={24}
+                  disabled={guestLoading}
+                />
+              </label>
 
-                <div className="guest-notice">
-                  访客可查看频道、加入语音和使用基础聊天；频道和战队管理仅限正式成员。
-                </div>
+              <div className="guest-notice">
+                访客可查看频道、加入语音和使用基础聊天；频道和战队管理仅限正式成员。
+              </div>
 
-                <div className="guest-login-actions">
-                  <button
-                    type="button"
-                    className="guest-cancel-button"
-                    onClick={() => {
-                      setShowGuestLogin(false);
-                      setGuestNickname("");
-                      setError("");
-                    }}
-                    disabled={guestLoading}
-                  >
-                    取消
-                  </button>
+              <div className="guest-login-actions">
+                <button
+                  type="button"
+                  className="guest-cancel-button"
+                  onClick={() => {
+                    setShowGuestLogin(false);
+                    setGuestNickname("");
+                    setError("");
+                  }}
+                  disabled={guestLoading}
+                >
+                  取消
+                </button>
 
-                  <button
-                    type="submit"
-                    className="guest-enter-button"
-                    disabled={guestLoading}
-                  >
-                    {guestLoading
-                      ? "正在进入..."
-                      : "进入 NovaSpeak"}
-                  </button>
-                </div>
-              </form>
+                <button
+                  type="submit"
+                  className="guest-enter-button"
+                  disabled={guestLoading}
+                >
+                  {guestLoading
+                    ? "正在进入..."
+                    : "进入 NovaSpeak"}
+                </button>
+              </div>
+
             </div>
           )}
         </form>
