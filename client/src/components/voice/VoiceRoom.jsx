@@ -17,7 +17,7 @@ function microphoneError(error) {
   return "无法控制麦克风";
 }
 
-export default function VoiceRoom({ channel, currentUser, apiBase, onLeave, onChannelsChanged }) {
+export default function VoiceRoom({ channel, currentUser, apiBase, onLeave, onChannelsChanged, onPresenceLocationChange, onlineMembers, presenceStatus }) {
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState("connecting");
   const [error, setError] = useState("");
@@ -107,12 +107,13 @@ export default function VoiceRoom({ channel, currentUser, apiBase, onLeave, onCh
       setError("连接已断开");
       setMicrophoneEnabled(false);
       cleanupAudio();
+      onPresenceLocationChange({ state: "lobby", channelId: null });
     };
 
     activeRoom
-      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChanged(); } })
-      .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); } })
-      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); } })
+      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChanged(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
+      .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); onPresenceLocationChange({ state: "reconnecting", channelId: channel.id }); } })
+      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
       .on(RoomEvent.Disconnected, onDisconnected)
       .on(RoomEvent.ParticipantConnected, sync)
       .on(RoomEvent.ParticipantDisconnected, sync)
@@ -161,9 +162,10 @@ export default function VoiceRoom({ channel, currentUser, apiBase, onLeave, onCh
       activeRoom.removeAllListeners();
       cleanupAudio();
       if (activeRoom.state !== ConnectionState.Disconnected) activeRoom.disconnect();
+      onPresenceLocationChange({ state: "lobby", channelId: null });
       if (roomRef.current === activeRoom) roomRef.current = null;
     };
-  }, [apiBase, channel.id, cleanupAudio, refreshDevices, onChannelsChanged, retryVersion, syncParticipants]);
+  }, [apiBase, channel.id, cleanupAudio, refreshDevices, onChannelsChanged, onPresenceLocationChange, retryVersion, syncParticipants]);
 
   const toggleMicrophone = async () => {
     const activeRoom = roomRef.current;
@@ -281,7 +283,7 @@ export default function VoiceRoom({ channel, currentUser, apiBase, onLeave, onCh
           </div>
           <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
-        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} />
+        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
       <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={onLeave} />

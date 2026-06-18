@@ -1,12 +1,21 @@
 import VoiceParticipantCard from "./VoiceParticipantCard";
+import OnlineMembersPanel from "../presence/OnlineMembersPanel";
+import { useState } from "react";
 
-export default function VoiceParticipantList({ participants, participantLoss }) {
+export default function VoiceParticipantList({ participants, participantLoss, onlineMembers, presenceStatus }) {
+  const [tab, setTab] = useState("channel");
   return (
     <aside className="voice-participants-panel">
-      <div className="voice-panel-title"><h3>频道成员</h3><span>{participants.length}</span></div>
-      <div className="voice-participant-list">
-        {participants.map((item) => <VoiceParticipantCard key={item.id} item={item} receiveLoss={participantLoss[item.id]} />)}
+      <div className="member-panel-tabs">
+        <button type="button" className={tab === "channel" ? "active" : ""} onClick={() => setTab("channel")}>频道成员</button>
+        <button type="button" className={tab === "online" ? "active" : ""} onClick={() => setTab("online")}>在线成员</button>
       </div>
+      {tab === "channel" ? <>
+        <div className="voice-panel-title"><h3>频道成员</h3><span>{participants.length}</span></div>
+        <div className="voice-participant-list">
+          {participants.map((item) => <VoiceParticipantCard key={item.id} item={item} receiveLoss={participantLoss[item.id]} />)}
+        </div>
+      </> : <OnlineMembersPanel members={onlineMembers} connectionStatus={presenceStatus} embedded />}
     </aside>
   );
 }
