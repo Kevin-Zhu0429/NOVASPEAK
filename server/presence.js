@@ -117,11 +117,11 @@ export function createPresenceService(options = {}) {
     }
     principal.connections.set(connection, {
       state: "lobby", channelId: null, channelName: "大厅",
-      connectedAt: Date.now(), updatedAt: Date.now(), alive: true, req,
+      connectedAt: Date.now(), updatedAt: Date.now(), req,
     });
+    connection.isAlive = true;
     connection.on("pong", () => {
-      const state = principal?.connections.get(connection);
-      if (state) state.alive = true;
+      connection.isAlive = true;
     });
     connection.on("message", (data, isBinary) => {
       if (isBinary) {
@@ -183,32 +183,41 @@ export function createPresenceService(options = {}) {
     return true;
   }
 
-  function runHeartbeatCheck() {
+  async function runHeartbeatCheck() {
     let changed = false;
+    const revalidationTasks = [];
+
     for (const [key, principal] of principals) {
       for (const [connection, state] of principal.connections) {
-        let user;
-        try { user = authResolver(state.req); } catch { user = null; }
-        if (!user || principalKey(user) !== key) {
-          connection.close(4401, "登录状态已失效");
+        if (connection.isAlive === false) {
+          closeAbnormalConnection(connection);
           continue;
         }
-        const nextProfile = profileFor(user);
-        if (JSON.stringify(nextProfile) !== JSON.stringify(principal.profile)) {
-          principal.profile = nextProfile; changed = true;
-        }
-        if (state.alive === false) {
+
+        connection.isAlive = false;
+        try {
+          connection.ping();
+        } catch {
           closeAbnormalConnection(connection);
-        } else {
-          state.alive = false;
-          try {
-            connection.ping();
-          } catch {
-            closeAbnormalConnection(connection);
-          }
+          continue;
         }
+
+        revalidationTasks.push((async () => {
+          let user;
+          try { user = await authResolver(state.req); } catch { user = null; }
+          if (!user || principalKey(user) !== key) {
+            connection.close(4401, "登录状态已失效");
+            return;
+          }
+          const nextProfile = profileFor(user);
+          if (JSON.stringify(nextProfile) !== JSON.stringify(principal.profile)) {
+            principal.profile = nextProfile; changed = true;
+          }
+        })());
       }
     }
+
+    await Promise.allSettled(revalidationTasks);
     if (changed) broadcast();
   }
 
