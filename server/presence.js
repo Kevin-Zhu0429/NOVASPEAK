@@ -183,7 +183,7 @@ export function createPresenceService(options = {}) {
     return true;
   }
 
-  const timer = setInterval(() => {
+  function runHeartbeatCheck() {
     let changed = false;
     for (const [key, principal] of principals) {
       for (const [connection, state] of principal.connections) {
@@ -197,7 +197,7 @@ export function createPresenceService(options = {}) {
         if (JSON.stringify(nextProfile) !== JSON.stringify(principal.profile)) {
           principal.profile = nextProfile; changed = true;
         }
-        if (!state.alive) {
+        if (state.alive === false) {
           closeAbnormalConnection(connection);
         } else {
           state.alive = false;
@@ -210,13 +210,16 @@ export function createPresenceService(options = {}) {
       }
     }
     if (changed) broadcast();
-  }, heartbeatMs);
+  }
+
+  const timer = setInterval(runHeartbeatCheck, heartbeatMs);
   timer.unref?.();
 
   return {
     handleUpgrade,
     publicMembers,
     principals,
+    runHeartbeatCheck,
     addConnection,
     close: () => {
       clearInterval(timer);

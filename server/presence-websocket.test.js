@@ -1,8 +1,27 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import Database from "better-sqlite3";
 import WebSocket from "ws";
-import { createPresenceService } from "./presence.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const productionDbPath = path.resolve(__dirname, "data", "novaspeak.db");
+const importDbDir = await fs.mkdtemp(path.join(os.tmpdir(), "novaspeak-presence-import-"));
+const importDbPath = path.join(importDbDir, "novaspeak-test.db");
+assert.notEqual(path.resolve(importDbPath), productionDbPath);
+process.env.NOVASPEAK_DB_PATH = importDbPath;
+const { createPresenceService } = await import("./presence.js");
+const importedDb = (await import("./db.js")).default;
+
+test.after(async () => {
+  importedDb.close();
+  await fs.rm(importDbDir, { recursive: true, force: true });
+});
 
 const identities = {
   admin: {
@@ -24,11 +43,38 @@ function cookieIdentity(req) {
   return identities[match?.[1]] || null;
 }
 
+async function createTestDatabase() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "novaspeak-presence-ws-"));
+  const dbPath = path.join(dir, "novaspeak-test.db");
+  assert.notEqual(path.resolve(dbPath), productionDbPath);
+  const db = new Database(dbPath);
+  db.pragma("foreign_keys = ON");
+  db.exec(`
+    CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL, username_key TEXT NOT NULL UNIQUE, display_name TEXT, password_hash TEXT NOT NULL, role TEXT NOT NULL, position TEXT NOT NULL DEFAULT 'member', created_at INTEGER NOT NULL);
+    CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);
+    CREATE TABLE channels (id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, owner_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+    CREATE TABLE user_positions (user_id TEXT NOT NULL, position TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, position), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);
+  `);
+  const now = Date.now();
+  db.prepare("INSERT INTO users (id, username, username_key, display_name, password_hash, role, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("admin-id", "ADMIN01", "admin01", "ADMIN01", "test-hash", "admin", "captain", now);
+  db.prepare("INSERT INTO users (id, username, username_key, display_name, password_hash, role, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("member-id", "PLAYER01", "player01", "PLAYER01", "test-hash", "member", "member", now);
+  db.prepare("INSERT INTO user_positions (user_id, position) VALUES (?, ?)").run("admin-id", "captain");
+  db.prepare("INSERT INTO user_positions (user_id, position) VALUES (?, ?)").run("member-id", "member");
+  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run("admin-session", "admin-id", now + 3600000, now);
+  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run("member-session", "member-id", now + 3600000, now);
+  db.prepare("INSERT INTO channels (id, name, name_key, is_default, created_at) VALUES (?, ?, ?, ?, ?)").run("cs2", "服务器 CS2", "cs2", 1, now);
+  db.prepare("INSERT INTO channels (id, name, name_key, is_default, created_at) VALUES (?, ?, ?, ?, ?)").run("apex", "服务器 Apex", "apex", 1, now);
+  return { db, dbPath, dir };
+}
+
 async function createFixture(options = {}) {
+  const testDb = await createTestDatabase();
   const presence = createPresenceService({
     heartbeatMs: options.heartbeatMs ?? 60_000,
     authResolver: options.authResolver ?? cookieIdentity,
-    channelLookup: (id) => id === "cs2" ? { id, name: "服务器 CS2" } : null,
+    channelLookup: (id) => testDb.db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
   });
   const server = createServer((req, res) => {
     res.writeHead(404).end();
@@ -40,31 +86,61 @@ async function createFixture(options = {}) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
+  const clients = new Set();
   return {
     presence,
+    dbPath: testDb.dbPath,
     url: `ws://127.0.0.1:${port}`,
+    track: (ws) => {
+      clients.add(ws);
+      ws.once("close", () => clients.delete(ws));
+      return ws;
+    },
     close: async () => {
+      for (const ws of clients) ws.terminate();
       presence.close();
       await new Promise((resolve) => server.close(resolve));
+      testDb.db.close();
+      await fs.rm(testDb.dir, { recursive: true, force: true });
     },
   };
 }
 
-function connect(url, identity, path = "/ws/presence") {
+function connect(fixture, identity, socketPath = "/ws/presence") {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${url}${path}`, {
+    const ws = new WebSocket(`${fixture.url}${socketPath}`, {
       headers: identity ? { Cookie: `test_identity=${identity}` } : undefined,
     });
-    ws.once("open", () => resolve(ws));
+    ws.once("open", () => resolve(fixture.track(ws)));
     ws.once("error", reject);
   });
 }
 
-function nextMessage(ws, predicate = () => true) {
+function summarizeMessages(messages) {
+  return messages.map((message) => ({
+    type: message.type,
+    error: message.error,
+    members: message.members?.map((member) => ({
+      nickname: member.nickname,
+      state: member.state,
+      channelId: member.channelId,
+      channelName: member.channelName,
+      deviceCount: member.deviceCount,
+    })),
+  }));
+}
+
+function waitForMessage(ws, predicate, { timeout = 1000 } = {}) {
+  const seen = [];
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for message; seen=${JSON.stringify(summarizeMessages(seen))}`));
+    }, timeout);
     const onMessage = (data) => {
       try {
         const value = JSON.parse(data.toString());
+        seen.push(value);
         if (!predicate(value)) return;
         cleanup();
         resolve(value);
@@ -75,14 +151,27 @@ function nextMessage(ws, predicate = () => true) {
     };
     const onClose = (code) => {
       cleanup();
-      reject(new Error(`socket closed before message: ${code}`));
+      reject(new Error(`socket closed before message: ${code}; seen=${JSON.stringify(summarizeMessages(seen))}`));
     };
     const cleanup = () => {
+      clearTimeout(timer);
       ws.off("message", onMessage);
       ws.off("close", onClose);
     };
     ws.on("message", onMessage);
     ws.on("close", onClose);
+  });
+}
+
+function waitFor(predicate, { timeout = 1000, interval = 10 } = {}) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const check = () => {
+      if (predicate()) return resolve();
+      if (Date.now() - started >= timeout) return reject(new Error("timed out waiting for condition"));
+      setTimeout(check, interval);
+    };
+    check();
   });
 }
 
@@ -95,6 +184,7 @@ function waitForClose(ws) {
 test("upgrade authentication accepts all roles and rejects missing or forged identity", async (t) => {
   const fixture = await createFixture();
   t.after(fixture.close);
+  assert.notEqual(path.resolve(fixture.dbPath), productionDbPath);
 
   const status = await new Promise((resolve, reject) => {
     const ws = new WebSocket(`${fixture.url}/ws/presence?role=admin`);
@@ -104,9 +194,10 @@ test("upgrade authentication accepts all roles and rejects missing or forged ide
   assert.equal(status, 401);
 
   for (const identity of ["admin", "member", "guest"]) {
-    const ws = await connect(fixture.url, identity);
+    const ws = await connect(fixture, identity);
     assert.equal(ws.readyState, WebSocket.OPEN);
     ws.close();
+    await waitForClose(ws);
   }
 
   const otherPathStatus = await new Promise((resolve, reject) => {
@@ -122,18 +213,13 @@ test("upgrade authentication accepts all roles and rejects missing or forged ide
 test("real clients preserve message validation, fragmentation, aggregation, and receiver-specific snapshots", async (t) => {
   const fixture = await createFixture();
   t.after(fixture.close);
-  const admin = await connect(fixture.url, "admin");
-  const member = await connect(fixture.url, "member");
-  const adminSecondDevice = await connect(fixture.url, "admin");
-  t.after(() => {
-    admin.terminate();
-    member.terminate();
-    adminSecondDevice.terminate();
-  });
+  const admin = await connect(fixture, "admin");
+  const member = await connect(fixture, "member");
+  const adminSecondDevice = await connect(fixture, "admin");
 
-  const adminSnapshotPromise = nextMessage(admin, (message) =>
+  const adminSnapshotPromise = waitForMessage(admin, (message) =>
     message.type === "presence:snapshot" && message.members.length === 2);
-  const memberSnapshotPromise = nextMessage(member, (message) =>
+  const memberSnapshotPromise = waitForMessage(member, (message) =>
     message.type === "presence:snapshot" && message.members.length === 2);
   adminSecondDevice.send(JSON.stringify({ type: "presence:set-location", state: "lobby", channelId: null }));
   const [adminSnapshot, memberSnapshot] = await Promise.all([adminSnapshotPromise, memberSnapshotPromise]);
@@ -148,8 +234,11 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
     type: "presence:set-location", state: "in_channel", channelId: "cs2",
     nickname: "FORGED", role: "guest", positions: ["captain"],
   });
-  const updatedPromise = nextMessage(admin, (message) =>
-    message.members?.some((item) => item.nickname === "PLAYER01" && item.channelName === "服务器 CS2"));
+  const updatedPromise = waitForMessage(admin, (message) => {
+    if (message.type !== "presence:snapshot") return false;
+    const player = message.members.find((item) => item.nickname === "PLAYER01");
+    return player?.state === "in_channel" && player?.channelId === "cs2" && player?.channelName === "服务器 CS2";
+  });
   member.send(update.slice(0, 20), { fin: false });
   member.send(update.slice(20), { fin: true });
   const updated = await updatedPromise;
@@ -157,11 +246,11 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   assert.equal(player.roleLabel, "成员");
   assert.deepEqual(player.positions, ["member"]);
 
-  const errorPromise = nextMessage(member, (message) => message.type === "presence:error");
+  const errorPromise = waitForMessage(member, (message) => message.type === "presence:error");
   member.send("{malformed");
   assert.equal((await errorPromise).error, "消息不是有效 JSON");
 
-  const invalidChannelError = nextMessage(member, (message) =>
+  const invalidChannelError = waitForMessage(member, (message) =>
     message.type === "presence:error" && message.error === "频道不存在");
   member.send(JSON.stringify({
     type: "presence:set-location", state: "in_channel", channelId: "missing",
@@ -169,7 +258,7 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   await invalidChannelError;
   assert.equal(fixture.presence.publicMembers("user:member-id")[0].channelId, "cs2");
 
-  const unknownMessageError = nextMessage(member, (message) =>
+  const unknownMessageError = waitForMessage(member, (message) =>
     message.type === "presence:error" && message.error === "无效的在线状态消息");
   member.send(JSON.stringify({ type: "presence:unknown", state: "lobby" }));
   await unknownMessageError;
@@ -177,7 +266,7 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   for (let index = 0; index < 10; index += 1) {
     member.send(JSON.stringify({ type: "presence:set-location", state: "lobby", channelId: null }));
   }
-  await nextMessage(member, (message) =>
+  await waitForMessage(member, (message) =>
     message.type === "presence:snapshot" &&
     message.members.find((item) => item.nickname === "PLAYER01")?.state === "lobby");
 });
@@ -186,12 +275,12 @@ test("binary and oversized messages are closed by the ws transport", async (t) =
   const fixture = await createFixture();
   t.after(fixture.close);
 
-  const binary = await connect(fixture.url, "member");
+  const binary = await connect(fixture, "member");
   const binaryClose = waitForClose(binary);
   binary.send(Buffer.from([1, 2, 3]));
   assert.equal((await binaryClose).code, 1003);
 
-  const oversized = await connect(fixture.url, "member");
+  const oversized = await connect(fixture, "member");
   const oversizedClose = waitForClose(oversized);
   oversized.send("x".repeat(4097));
   assert.equal((await oversizedClose).code, 1009);
@@ -200,40 +289,53 @@ test("binary and oversized messages are closed by the ws transport", async (t) =
 test("normal close, terminate, heartbeat, and identity invalidation clean up Presence", async (t) => {
   let valid = true;
   const fixture = await createFixture({
-    heartbeatMs: 30,
+    heartbeatMs: 60_000,
     authResolver: (req) => valid ? cookieIdentity(req) : null,
   });
   t.after(fixture.close);
 
-  const normal = await connect(fixture.url, "admin");
-  assert.equal(fixture.presence.publicMembers("user:admin-id").length, 1);
+  const normal = await connect(fixture, "admin");
+  const secondNormal = await connect(fixture, "admin");
+  assert.equal(fixture.presence.publicMembers("user:admin-id")[0].deviceCount, 2);
   const normalClose = waitForClose(normal);
   normal.close();
   await normalClose;
-  assert.equal(fixture.presence.publicMembers("user:admin-id").length, 0);
+  await waitFor(() => fixture.presence.publicMembers("user:admin-id")[0]?.deviceCount === 1);
+  assert.equal(fixture.presence.publicMembers("user:admin-id")[0].deviceCount, 1);
+  const secondNormalClose = waitForClose(secondNormal);
+  secondNormal.close();
+  await secondNormalClose;
+  await waitFor(() => fixture.presence.publicMembers("user:admin-id").length === 0);
 
-  const abnormal = await connect(fixture.url, "member");
+  const abnormal = await connect(fixture, "member");
+  const abnormalClose = waitForClose(abnormal);
   abnormal.terminate();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(fixture.presence.publicMembers("user:member-id").length, 0);
+  await abnormalClose;
+  await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
 
-  const expiring = await connect(fixture.url, "guest");
-  let pongCount = 0;
-  expiring.on("ping", () => { pongCount += 1; });
-  await new Promise((resolve) => setTimeout(resolve, 45));
-  assert.ok(pongCount >= 1);
+  const expiring = await connect(fixture, "guest");
+  fixture.presence.runHeartbeatCheck();
   valid = false;
-  const closed = await waitForClose(expiring);
-  assert.equal(closed.code, 4401);
-  assert.equal(fixture.presence.publicMembers("guest:test-uuid").length, 0);
+  const closed = waitForClose(expiring);
+  fixture.presence.runHeartbeatCheck();
+  assert.equal((await closed).code, 4401);
+  await waitFor(() => fixture.presence.publicMembers("guest:test-uuid").length === 0);
 });
 
-test("a client that does not answer ping is terminated by the heartbeat", async (t) => {
-  const fixture = await createFixture({ heartbeatMs: 30 });
+test("heartbeat keeps responsive ws clients and terminates explicitly stale connections", async (t) => {
+  const fixture = await createFixture({ heartbeatMs: 60_000 });
   t.after(fixture.close);
-  const unresponsive = await connect(fixture.url, "member");
-  unresponsive.pong = () => {};
+  const responsive = await connect(fixture, "admin");
+  fixture.presence.runHeartbeatCheck();
+  await waitFor(() => fixture.presence.publicMembers("user:admin-id").length === 1);
+  assert.equal(responsive.readyState, WebSocket.OPEN);
+
+  const unresponsive = await connect(fixture, "member");
+  const principal = fixture.presence.principals.get("user:member-id");
+  const serverConnection = [...principal.connections.keys()][0];
+  principal.connections.get(serverConnection).alive = false;
   const closed = waitForClose(unresponsive);
+  fixture.presence.runHeartbeatCheck();
   assert.equal((await closed).code, 1006);
-  assert.equal(fixture.presence.publicMembers("user:member-id").length, 0);
+  await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
 });
