@@ -1,8 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { aggregateConnections, createPresenceService } from "./presence.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const productionDbPath = path.resolve(__dirname, "data", "novaspeak.db");
+const testDbDir = await fs.mkdtemp(path.join(os.tmpdir(), "novaspeak-presence-unit-"));
+const testDbPath = path.join(testDbDir, "novaspeak-test.db");
+assert.notEqual(path.resolve(testDbPath), productionDbPath);
+process.env.NOVASPEAK_DB_PATH = testDbPath;
+const { aggregateConnections, createPresenceService } = await import("./presence.js");
+const importedDb = (await import("./db.js")).default;
+
+test.after(async () => {
+  importedDb.close();
+  await fs.rm(testDbDir, { recursive: true, force: true });
+});
 
 const connectionMap = (...states) => new Map(states.map((state, index) => [{ index }, state]));
 
