@@ -73,6 +73,7 @@ async function createFixture(options = {}) {
   const testDb = await createTestDatabase();
   const presence = createPresenceService({
     heartbeatMs: options.heartbeatMs ?? 60_000,
+    autoHeartbeat: options.autoHeartbeat ?? false,
     authResolver: options.authResolver ?? cookieIdentity,
     channelLookup: (id) => testDb.db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
   });
@@ -99,8 +100,8 @@ async function createFixture(options = {}) {
       return ws;
     },
     close: async () => {
-      for (const ws of clients) ws.terminate();
       presence.close();
+      for (const ws of clients) ws.terminate();
       await new Promise((resolve) => server.close(resolve));
       testDb.db.close();
       await fs.rm(testDb.dir, { recursive: true, force: true });
@@ -331,10 +332,10 @@ test("normal close, terminate, heartbeat, and identity invalidation clean up Pre
   await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
 
   const expiring = await connect(fixture, "guest");
-  await fixture.presence.runHeartbeatCheck();
+  assert.equal([...fixture.presence.principals.get("guest:test-uuid").connections.keys()][0].isAlive, true);
   valid = false;
   const closed = waitForClose(expiring);
-  await fixture.presence.runHeartbeatCheck();
+  await fixture.presence.runIdentityRevalidation();
   assert.equal((await closed).code, 4401);
   await waitFor(() => fixture.presence.publicMembers("guest:test-uuid").length === 0);
 });
@@ -346,11 +347,14 @@ test("heartbeat keeps responsive ws clients and terminates explicitly stale conn
   const principal = fixture.presence.principals.get("user:admin-id");
   const [responsiveServerWs] = principal.connections.keys();
   const pong = new Promise((resolve) => responsiveServerWs.once("pong", resolve));
-  await fixture.presence.runHeartbeatCheck();
+  assert.equal(responsiveServerWs.isAlive, true);
+  await fixture.presence.runTransportHeartbeatCheck();
   assert.equal(responsiveServerWs.isAlive, false);
   await pong;
   assert.equal(responsiveServerWs.isAlive, true);
-  await fixture.presence.runHeartbeatCheck();
+  const nextPong = new Promise((resolve) => responsiveServerWs.once("pong", resolve));
+  await fixture.presence.runTransportHeartbeatCheck();
+  await nextPong;
   await waitFor(() => fixture.presence.publicMembers("user:admin-id").length === 1);
   assert.equal(responsive.readyState, WebSocket.OPEN);
 
@@ -360,7 +364,7 @@ test("heartbeat keeps responsive ws clients and terminates explicitly stale conn
   serverConnection.isAlive = false;
   assert.equal(serverConnection.isAlive, false);
   const closed = waitForClose(unresponsive);
-  await fixture.presence.runHeartbeatCheck();
+  await fixture.presence.runTransportHeartbeatCheck();
   assert.equal((await closed).code, 1006);
   await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
 });

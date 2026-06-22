@@ -30,6 +30,8 @@ export function aggregateConnections(connections) {
 export function createPresenceService(options = {}) {
   const principals = new Map();
   const heartbeatMs = options.heartbeatMs ?? 30_000;
+  const autoHeartbeat = options.autoHeartbeat ?? true;
+  const diagnosticLogger = options.diagnosticLogger;
   const authResolver = options.authResolver ?? resolveAuthenticatedIdentity;
   const channelLookup = options.channelLookup ?? ((id) => db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id));
   const wss = new WebSocketServer({
@@ -183,13 +185,17 @@ export function createPresenceService(options = {}) {
     return true;
   }
 
-  async function runHeartbeatCheck() {
-    let changed = false;
-    const revalidationTasks = [];
+  function safeDiagnostic(event) {
+    if (typeof diagnosticLogger !== "function") return;
+    try { diagnosticLogger(event); } catch { /* diagnostics must never affect Presence */ }
+  }
 
-    for (const [key, principal] of principals) {
-      for (const [connection, state] of principal.connections) {
+  async function runTransportHeartbeatCheck() {
+    for (const principal of principals.values()) {
+      for (const connection of principal.connections.keys()) {
+        safeDiagnostic({ phase: "transport", isAlive: connection.isAlive });
         if (connection.isAlive === false) {
+          safeDiagnostic({ phase: "transport", isAlive: connection.isAlive, terminateRequested: true });
           closeAbnormalConnection(connection);
           continue;
         }
@@ -198,14 +204,26 @@ export function createPresenceService(options = {}) {
         try {
           connection.ping();
         } catch {
+          safeDiagnostic({ phase: "transport", isAlive: connection.isAlive, terminateRequested: true });
           closeAbnormalConnection(connection);
-          continue;
         }
+      }
+    }
+  }
 
+  async function runIdentityRevalidation() {
+    let changed = false;
+    const revalidationTasks = [];
+
+    for (const [key, principal] of principals) {
+      for (const [connection, state] of principal.connections) {
         revalidationTasks.push((async () => {
           let user;
           try { user = await authResolver(state.req); } catch { user = null; }
-          if (!user || principalKey(user) !== key) {
+          const valid = Boolean(user && principalKey(user) === key);
+          safeDiagnostic({ phase: "identity", isAlive: connection.isAlive, identity: valid ? "valid" : "invalid" });
+          if (!valid) {
+            safeDiagnostic({ phase: "identity", isAlive: connection.isAlive, identity: "invalid", closeRequested: true });
             connection.close(4401, "登录状态已失效");
             return;
           }
@@ -221,17 +239,35 @@ export function createPresenceService(options = {}) {
     if (changed) broadcast();
   }
 
-  const timer = setInterval(runHeartbeatCheck, heartbeatMs);
-  timer.unref?.();
+  async function runHeartbeatCheck() {
+    await runTransportHeartbeatCheck();
+    await runIdentityRevalidation();
+  }
+
+  let heartbeatRunning = false;
+  const timer = autoHeartbeat ? setInterval(() => {
+    if (heartbeatRunning) return;
+    heartbeatRunning = true;
+    Promise.resolve(runHeartbeatCheck())
+      .catch((error) => {
+        console.error("Presence heartbeat failed:", error?.message || "unknown error");
+      })
+      .finally(() => {
+        heartbeatRunning = false;
+      });
+  }, heartbeatMs) : null;
+  timer?.unref?.();
 
   return {
     handleUpgrade,
     publicMembers,
     principals,
     runHeartbeatCheck,
+    runTransportHeartbeatCheck,
+    runIdentityRevalidation,
     addConnection,
     close: () => {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       for (const principal of principals.values()) {
         for (const connection of principal.connections.keys()) {
           closeAbnormalConnection(connection);
