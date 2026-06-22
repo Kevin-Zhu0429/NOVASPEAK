@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import WebSocket from "ws";
 import { aggregateConnections, createPresenceService } from "./presence.js";
 
 const connectionMap = (...states) => new Map(states.map((state, index) => [{ index }, state]));
@@ -36,10 +37,23 @@ test("all channel connections reconnecting aggregate to reconnecting", () => {
 
 class FakeConnection extends EventEmitter {
   messages = [];
-  sendJson(message) { this.messages.push(message); }
+  readyState = WebSocket.OPEN;
+  bufferedAmount = 0;
+  send(message, callback) {
+    this.messages.push(JSON.parse(message));
+    callback?.();
+  }
   ping() {}
-  close(code) { this.closeCode = code; this.emit("close"); }
-  terminate() { this.terminated = true; this.emit("close"); }
+  close(code) {
+    this.closeCode = code;
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close");
+  }
+  terminate() {
+    this.terminated = true;
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close");
+  }
 }
 
 const formalUser = {
