@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -166,12 +167,60 @@ function waitForMessage(ws, predicate, { timeout = 1000 } = {}) {
   });
 }
 
-function waitFor(predicate, { timeout = 1000, interval = 10 } = {}) {
+function readyStateName(ws) {
+  if (!ws) return "missing";
+  return Object.entries(WebSocket)
+    .find(([, value]) => value === ws.readyState)?.[0] ?? ws.readyState;
+}
+
+function collectPresenceDiagnostics({
+  fixture,
+  responsiveClient,
+  staleClient,
+  responsiveServerWs,
+  staleServerWs,
+} = {}) {
+  const principalSummaries = [...(fixture?.presence.principals ?? new Map()).entries()]
+    .map(([key, principal]) => ({
+      key,
+      connectionsSize: principal.connections.size,
+    }));
+  const publicMembers = fixture?.presence.publicMembers()
+    .map((member) => ({
+      nickname: member.nickname,
+      presenceId: member.presenceId,
+      deviceCount: member.deviceCount,
+    })) ?? [];
+
+  return {
+    responsiveClientReadyState: readyStateName(responsiveClient),
+    staleClientReadyState: readyStateName(staleClient),
+    responsiveServerReadyState: readyStateName(responsiveServerWs),
+    staleServerReadyState: readyStateName(staleServerWs),
+    responsiveServerIsAlive: responsiveServerWs?.isAlive,
+    staleServerIsAlive: staleServerWs?.isAlive,
+    principalCount: fixture?.presence.principals.size,
+    principals: principalSummaries,
+    publicMembers,
+  };
+}
+
+function waitFor(predicate, {
+  timeout = 1000,
+  interval = 10,
+  description = "condition",
+  diagnostics,
+} = {}) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const check = () => {
       if (predicate()) return resolve();
-      if (Date.now() - started >= timeout) return reject(new Error("timed out waiting for condition"));
+      if (Date.now() - started >= timeout) {
+        const diagnosticText = diagnostics
+          ? `; diagnostics=${JSON.stringify(diagnostics())}`
+          : "";
+        return reject(new Error(`timed out waiting for ${description}${diagnosticText}`));
+      }
       setTimeout(check, interval);
     };
     check();
@@ -260,7 +309,7 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   await waitFor(() => {
     const current = fixture.presence.publicMembers("user:member-id");
     return current.find((item) => item.nickname === "PLAYER01")?.channelId === "cs2";
-  });
+  }, { description: "member channel update visible in public presence" });
 
   const errorPromise = waitForMessage(member, (message) => message.type === "presence:error");
   member.send("{malformed");
@@ -318,18 +367,28 @@ test("normal close, terminate, heartbeat, and identity invalidation clean up Pre
   const normalClose = waitForClose(normal);
   normal.close();
   await normalClose;
-  await waitFor(() => fixture.presence.publicMembers("user:admin-id")[0]?.deviceCount === 1);
+  await waitFor(
+    () => fixture.presence.publicMembers("user:admin-id")
+      .find((item) => item.nickname === "ADMIN01")?.deviceCount === 1,
+    { description: "admin first normal close reduces device count" },
+  );
   assert.equal(fixture.presence.publicMembers("user:admin-id")[0].deviceCount, 1);
   const secondNormalClose = waitForClose(secondNormal);
   secondNormal.close();
   await secondNormalClose;
-  await waitFor(() => fixture.presence.publicMembers("user:admin-id").length === 0);
+  await waitFor(
+    () => !fixture.presence.principals.has("user:admin-id"),
+    { description: "admin principal removed after last normal close" },
+  );
 
   const abnormal = await connect(fixture, "member");
   const abnormalClose = waitForClose(abnormal);
   abnormal.terminate();
   await abnormalClose;
-  await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
+  await waitFor(
+    () => !fixture.presence.principals.has("user:member-id"),
+    { description: "member principal removed after abnormal client terminate" },
+  );
 
   const expiring = await connect(fixture, "guest");
   assert.equal([...fixture.presence.principals.get("guest:test-uuid").connections.keys()][0].isAlive, true);
@@ -337,7 +396,10 @@ test("normal close, terminate, heartbeat, and identity invalidation clean up Pre
   const closed = waitForClose(expiring);
   await fixture.presence.runIdentityRevalidation();
   assert.equal((await closed).code, 4401);
-  await waitFor(() => fixture.presence.publicMembers("guest:test-uuid").length === 0);
+  await waitFor(
+    () => !fixture.presence.principals.has("guest:test-uuid"),
+    { description: "guest principal removed after identity invalidation" },
+  );
 });
 
 test("heartbeat keeps responsive ws clients and terminates explicitly stale connections", async (t) => {
@@ -346,25 +408,52 @@ test("heartbeat keeps responsive ws clients and terminates explicitly stale conn
   const responsive = await connect(fixture, "admin");
   const principal = fixture.presence.principals.get("user:admin-id");
   const [responsiveServerWs] = principal.connections.keys();
-  const pong = new Promise((resolve) => responsiveServerWs.once("pong", resolve));
+  const diagnostics = (staleClient, staleServerWs) => collectPresenceDiagnostics({
+    fixture,
+    responsiveClient: responsive,
+    staleClient,
+    responsiveServerWs,
+    staleServerWs,
+  });
+  const pongPromise = once(responsiveServerWs, "pong");
   assert.equal(responsiveServerWs.isAlive, true);
   await fixture.presence.runTransportHeartbeatCheck();
   assert.equal(responsiveServerWs.isAlive, false);
-  await pong;
+  await pongPromise;
   assert.equal(responsiveServerWs.isAlive, true);
-  const nextPong = new Promise((resolve) => responsiveServerWs.once("pong", resolve));
-  await fixture.presence.runTransportHeartbeatCheck();
-  await nextPong;
-  await waitFor(() => fixture.presence.publicMembers("user:admin-id").length === 1);
+  assert.equal(responsiveServerWs.readyState, WebSocket.OPEN);
+  assert.equal(principal.connections.has(responsiveServerWs), true);
+  await waitFor(
+    () => fixture.presence.publicMembers("user:admin-id")
+      .find((member) => member.nickname === "ADMIN01")?.deviceCount === 1,
+    {
+      description: "responsive public member remains online",
+      diagnostics: () => diagnostics(),
+    },
+  );
   assert.equal(responsive.readyState, WebSocket.OPEN);
 
-  const unresponsive = await connect(fixture, "member");
+  const stale = await connect(fixture, "member");
   const stalePrincipal = fixture.presence.principals.get("user:member-id");
-  const serverConnection = [...stalePrincipal.connections.keys()][0];
-  serverConnection.isAlive = false;
-  assert.equal(serverConnection.isAlive, false);
-  const closed = waitForClose(unresponsive);
+  const [staleServerWs] = stalePrincipal.connections.keys();
+  assert.equal(stalePrincipal.connections.has(staleServerWs), true);
+  staleServerWs.isAlive = false;
+  assert.equal(staleServerWs.isAlive, false);
+  const closed = waitForClose(stale);
   await fixture.presence.runTransportHeartbeatCheck();
   assert.equal((await closed).code, 1006);
-  await waitFor(() => fixture.presence.publicMembers("user:member-id").length === 0);
+  await waitFor(
+    () => !fixture.presence.principals.has("user:member-id"),
+    {
+      description: "stale principal removed after terminate",
+      diagnostics: () => diagnostics(stale, staleServerWs),
+    },
+  );
+  assert.equal(stalePrincipal.connections.has(staleServerWs), false);
+  assert.equal(principal.connections.has(responsiveServerWs), true);
+  const publicMembers = fixture.presence.publicMembers("user:admin-id");
+  assert.equal(publicMembers.find((member) => member.nickname === "ADMIN01")?.deviceCount, 1);
+  assert.equal(publicMembers.some((member) => member.nickname === "PLAYER01"), false);
+  assert.equal(responsive.readyState, WebSocket.OPEN);
+  assert.equal(responsiveServerWs.readyState, WebSocket.OPEN);
 });
