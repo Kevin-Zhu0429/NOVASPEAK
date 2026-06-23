@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectionState, DisconnectReason, Room, RoomEvent, Track } from "livekit-client";
+import { ConnectionState, Room, RoomEvent, Track } from "livekit-client";
 import AudioDevicePanel from "./AudioDevicePanel";
 import ConnectionStatus from "./ConnectionStatus";
 import NetworkStats from "./NetworkStats";
@@ -7,7 +7,8 @@ import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
-import { participantView } from "../../utils/voice-participant";
+import { isParticipantServerMuted, participantView } from "../../utils/voice-participant";
+import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 
 const CHAT_TOPIC = "nova-chat";
 
@@ -40,6 +41,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const deafenRef = useRef(false);
   const restoreMicrophone = useRef(false);
   const generation = useRef(0);
+  const movedRef = useRef(false);
   const devices = useAudioDevices(devicesOpen || Boolean(room));
   const refreshDevices = devices.refresh;
   const networkStats = useVoiceNetworkStats(room, status === "connected" || status === "restored", baselineVersion);
@@ -62,6 +64,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
   useEffect(() => {
     const currentGeneration = ++generation.current;
+    movedRef.current = false;
     const activeRoom = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = activeRoom;
     queueMicrotask(() => {
@@ -103,21 +106,32 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         console.error("聊天消息解析失败：", dataError);
       }
     };
-    const onDisconnected = (reason) => {
-      if (!valid()) return;
+    const onDisconnected = (disconnectReason) => {
+      const outcome = getDisconnectOutcome(disconnectReason, { moved: movedRef.current, roomMatches: roomRef.current === activeRoom });
+      if (!valid() || outcome.action === "ignore") return;
       setStatus("failed");
-      setError(reason === DisconnectReason.PARTICIPANT_REMOVED ? "你已被移出语音频道" : "连接已断开");
+      setError(outcome.message || "");
       setMicrophoneEnabled(false);
       cleanupAudio();
       onPresenceLocationChange({ state: "lobby", channelId: null });
-      if (reason === DisconnectReason.PARTICIPANT_REMOVED) onLeave?.("你已被移出语音频道");
+      if (outcome.removed) onLeave?.(outcome.message);
+    };
+    const onMoved = (targetRoomName) => {
+      if (!valid() || roomRef.current !== activeRoom) return;
+      const target = resolveMovedChannel(targetRoomName || activeRoom.name, channels);
+      if (!target) return;
+      movedRef.current = true;
+      setError("");
+      setStatus("connected");
+      onMovedToChannel?.(target.id, `你已被移动到“${target.name}”`);
+      onPresenceLocationChange({ state: "in_channel", channelId: target.id });
     };
 
     activeRoom
       .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChanged(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
       .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); onPresenceLocationChange({ state: "reconnecting", channelId: channel.id }); } })
       .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
-      .on(RoomEvent.Moved, () => { if (valid()) { const targetId = activeRoom.name; const target = channels.find((item) => item.id === targetId); if (target) onMovedToChannel?.(target.id, `你已被移动到“${target.name}”`); } })
+      .on(RoomEvent.Moved, onMoved)
       .on(RoomEvent.Disconnected, onDisconnected)
       .on(RoomEvent.ParticipantConnected, sync)
       .on(RoomEvent.ParticipantDisconnected, sync)
@@ -127,7 +141,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.TrackUnmuted, sync)
       .on(RoomEvent.TrackPublished, sync)
       .on(RoomEvent.TrackUnpublished, sync)
-      .on(RoomEvent.ParticipantPermissionsChanged, () => { sync(); const local = activeRoom.localParticipant; if (local?.permissions?.canPublish === false) { setMicrophoneEnabled(false); setOperationMessage("你已被服务器静音"); } else { setOperationMessage("服务器静音已解除，请自行开启麦克风"); } })
+      .on(RoomEvent.ParticipantMetadataChanged, sync)
+      .on(RoomEvent.ParticipantPermissionsChanged, () => { sync(); const local = activeRoom.localParticipant; if (isParticipantServerMuted(local)) { setMicrophoneEnabled(false); setOperationMessage("你已被服务器静音"); } else { setOperationMessage("服务器静音已解除，请自行开启麦克风"); } })
       .on(RoomEvent.TrackSubscribed, (track, publication) => { attachAudio(track, publication); sync(); })
       .on(RoomEvent.TrackUnsubscribed, (track, publication) => { detachAudio(track, publication); sync(); })
       .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
@@ -164,14 +179,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
     return () => {
       generation.current += 1;
+      activeRoom.off(RoomEvent.Moved, onMoved);
+      activeRoom.off(RoomEvent.Disconnected, onDisconnected);
       activeRoom.removeAllListeners();
       cleanupAudio();
       if (activeRoom.state !== ConnectionState.Disconnected) activeRoom.disconnect();
-      onPresenceLocationChange({ state: "lobby", channelId: null });
-      if (reason === DisconnectReason.PARTICIPANT_REMOVED) onLeave?.("你已被移出语音频道");
+      if (!movedRef.current && roomRef.current === activeRoom) onPresenceLocationChange({ state: "lobby", channelId: null });
       if (roomRef.current === activeRoom) roomRef.current = null;
     };
-  }, [apiBase, channel.id, cleanupAudio, refreshDevices, onChannelsChanged, onPresenceLocationChange, retryVersion, syncParticipants]);
+  }, [apiBase, channel.id, channels, cleanupAudio, refreshDevices, onChannelsChanged, onMovedToChannel, onPresenceLocationChange, retryVersion, syncParticipants]);
 
   const toggleMicrophone = async () => {
     const activeRoom = roomRef.current;
@@ -180,7 +196,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     setError("");
     try {
       const next = !microphoneEnabled;
-      if (activeRoom.localParticipant?.permissions?.canPublish === false) throw new Error("你已被服务器静音");
+      if (isParticipantServerMuted(activeRoom.localParticipant)) throw new Error("你已被服务器静音");
       await activeRoom.localParticipant.setMicrophoneEnabled(next);
       setMicrophoneEnabled(next);
       syncParticipants(activeRoom);
@@ -321,7 +337,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
-      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={room?.localParticipant?.permissions?.canPublish === false} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={onLeave} />
+      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={onLeave} />
     </div>
   );
 }

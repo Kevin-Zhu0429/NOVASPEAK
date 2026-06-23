@@ -72,7 +72,7 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     const key = muteKey(base.source.id, base.identity);
     const state = serverMutes.get(key);
     if (!state?.serverMuted) return { success: true, idempotent: true, serverMuted: false, participantName: displayName(base.participant) };
-    await roomService.updateParticipant(base.source.id, base.identity, { metadata: state.originalMetadata || metadataWithServerMuted(base.participant, false), permission: state.originalPermission || {}, name: base.participant.name || undefined });
+    await roomService.updateParticipant(base.source.id, base.identity, { metadata: metadataWithServerMuted(base.participant, false), permission: state.originalPermission || {}, name: base.participant.name || undefined });
     serverMutes.delete(key);
     presenceService?.sendCommandToChannelConnection?.(base.identity, base.source.id, { type: "presence:command", command: "server-unmuted", requestId: randomId(), sourceChannelId: base.source.id });
     return { success: true, serverMuted: false, participantName: displayName(base.participant) };
