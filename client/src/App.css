@@ -2047,3 +2047,18 @@ input {
   .message-input-row { padding: 9px; }
   .message-input-row button { width: 60px; }
 }
+
+.nova-voice-notice { position: fixed; z-index: 30; top: 18px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid rgba(45, 212, 191, .45); border-radius: 999px; color: #ccfbf1; background: rgba(6, 28, 36, .94); box-shadow: 0 14px 40px rgba(0, 0, 0, .28); }
+.nova-voice-notice button { border: 0; color: #0f172a; border-radius: 999px; background: #5eead4; padding: 4px 10px; }
+.voice-operation-message { margin: 0 20px 10px; padding: 9px 12px; border: 1px solid rgba(45, 212, 191, .25); border-radius: 12px; color: #ccfbf1; background: rgba(20, 184, 166, .09); }
+.voice-participant-card.operating { opacity: .72; pointer-events: none; }
+.voice-member-actions { position: absolute; top: 6px; right: 6px; z-index: 3; }
+.voice-member-menu-button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(148, 163, 184, .18); border-radius: 999px; color: #cbd5e1; background: rgba(15, 23, 42, .88); }
+.voice-member-menu-button:hover { border-color: rgba(45, 212, 191, .58); color: #ccfbf1; }
+.voice-member-menu { position: absolute; top: 32px; right: 0; min-width: 154px; padding: 6px; display: grid; gap: 4px; border: 1px solid rgba(94, 234, 212, .18); border-radius: 12px; background: rgba(3, 15, 22, .98); box-shadow: 0 18px 42px rgba(0, 0, 0, .38); }
+.voice-member-menu button, .voice-channel-submenu button { width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; color: #dbeafe; text-align: left; background: transparent; }
+.voice-member-menu button:hover, .voice-channel-submenu button:hover { color: #ecfeff; background: rgba(20, 184, 166, .18); }
+.voice-member-menu button:disabled, .voice-channel-submenu button:disabled { opacity: .52; cursor: not-allowed; }
+.voice-channel-submenu { margin: 0 0 2px 8px; padding-left: 6px; border-left: 1px solid rgba(94, 234, 212, .2); }
+.voice-channel-submenu span { display: block; padding: 7px 10px; color: #94a3b8; font-size: 12px; }
+.server-muted-badge { position: absolute; left: 10px; bottom: 6px; padding: 2px 7px; border-radius: 999px; color: #fecaca; background: rgba(127, 29, 29, .55); font-size: 10px; }

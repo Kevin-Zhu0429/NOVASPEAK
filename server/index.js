@@ -29,6 +29,7 @@ import {
   destroyGuestSession,
 } from "./guest-auth.js";
 import { createPresenceService } from "./presence.js";
+import { createVoiceManagementService } from "./voice-management.js";
 
 dotenv.config();
 
@@ -64,6 +65,14 @@ const roomService = new RoomServiceClient(
   process.env.LIVEKIT_API_KEY,
   process.env.LIVEKIT_API_SECRET
 );
+
+const presence = createPresenceService();
+
+const voiceManagement = createVoiceManagementService({
+  roomService,
+  presenceService: presence,
+  channelLookup: (id) => db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
+});
 
 async function getChannelStatus(channel) {
   try {
@@ -1337,6 +1346,61 @@ app.delete("/api/admin/members/:memberId",
   }
 );
 
+
+function sendVoiceManagementResult(res, result, successMessage) {
+  if (result.error) {
+    return res.status(result.status || 500).json({ error: result.error });
+  }
+  return res.json({
+    success: true,
+    message: successMessage(result),
+    serverMuted: result.serverMuted,
+    participantName: result.participantName,
+    targetChannelName: result.targetChannelName,
+    idempotent: Boolean(result.idempotent),
+  });
+}
+
+app.post("/api/voice/participants/mute", requireAuthenticated, async (req, res) => {
+  try {
+    const result = await voiceManagement.mute({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
+    return sendVoiceManagementResult(res, result, (value) => value.idempotent ? `“${value.participantName}”已处于服务器静音状态` : `已服务器静音“${value.participantName}”`);
+  } catch (error) {
+    console.error("Voice mute error:", error?.message || error);
+    return res.status(502).json({ error: "服务器静音失败" });
+  }
+});
+
+app.post("/api/voice/participants/unmute", requireAuthenticated, async (req, res) => {
+  try {
+    const result = await voiceManagement.unmute({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
+    return sendVoiceManagementResult(res, result, (value) => value.idempotent ? `“${value.participantName}”未处于服务器静音状态` : `已解除“${value.participantName}”的服务器静音`);
+  } catch (error) {
+    console.error("Voice unmute error:", error?.message || error);
+    return res.status(502).json({ error: "解除服务器静音失败" });
+  }
+});
+
+app.post("/api/voice/participants/remove", requireAuthenticated, async (req, res) => {
+  try {
+    const result = await voiceManagement.remove({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
+    return sendVoiceManagementResult(res, result, (value) => `已将“${value.participantName}”移出频道`);
+  } catch (error) {
+    console.error("Voice remove error:", error?.message || error);
+    return res.status(502).json({ error: "移出频道失败" });
+  }
+});
+
+app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) => {
+  try {
+    const result = await voiceManagement.move({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity, targetChannelId: req.body?.targetChannelId });
+    return sendVoiceManagementResult(res, result, (value) => `已将“${value.participantName}”移动到“${value.targetChannelName}”`);
+  } catch (error) {
+    console.error("Voice move error:", error?.message || error);
+    return res.status(502).json({ error: "移动频道失败" });
+  }
+});
+
 app.use("/api", (req, res) => {
   res.status(404).json({
     error: `API 不存在：${req.method} ${req.originalUrl}`,
@@ -1362,7 +1426,6 @@ app.use((req, res, next) => {
 
 
 const server = createServer(app);
-const presence = createPresenceService();
 
 server.on("upgrade", (req, socket, head) => {
   if (!presence.handleUpgrade(req, socket, head)) {

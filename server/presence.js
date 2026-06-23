@@ -80,6 +80,34 @@ export function createPresenceService(options = {}) {
     };
   }
 
+
+  function findChannelConnection(identity, sourceChannelId) {
+    for (const principal of principals.values()) {
+      for (const [connection, state] of principal.connections) {
+        const userId = state.req?.authUserId;
+        if (userId === identity && state.channelId === sourceChannelId) return { connection, state };
+      }
+    }
+    return null;
+  }
+
+  function sendCommandToChannelConnection(identity, sourceChannelId, command) {
+    const match = findChannelConnection(identity, sourceChannelId);
+    if (!match) return false;
+    return sendJson(match.connection, command);
+  }
+
+  function setConnectionLocation(identity, sourceChannelId, nextState) {
+    const match = findChannelConnection(identity, sourceChannelId);
+    if (!match) return false;
+    match.state.state = nextState.state;
+    match.state.channelId = nextState.channelId;
+    match.state.channelName = nextState.channelName;
+    match.state.updatedAt = Date.now();
+    broadcast();
+    return true;
+  }
+
   function publicMembers(viewerKey) {
     return [...principals.entries()].map(([key, principal]) => ({
       presenceId: principal.publicPresenceId,
@@ -117,6 +145,7 @@ export function createPresenceService(options = {}) {
     } else {
       principal.profile = profileFor(user);
     }
+    req.authUserId = user.id;
     principal.connections.set(connection, {
       state: "lobby", channelId: null, channelName: "大厅",
       connectedAt: Date.now(), updatedAt: Date.now(), req,
@@ -265,6 +294,8 @@ export function createPresenceService(options = {}) {
     runHeartbeatCheck,
     runTransportHeartbeatCheck,
     runIdentityRevalidation,
+    sendCommandToChannelConnection,
+    setConnectionLocation,
     addConnection,
     close: () => {
       if (timer) clearInterval(timer);
