@@ -29,6 +29,7 @@ export default function App() {
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [showTeamMembers, setShowTeamMembers] = useState(false);
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
+  const [voiceNotice, setVoiceNotice] = useState("");
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
   const presence = usePresence(currentUser, API_BASE);
@@ -140,11 +141,21 @@ export default function App() {
     }, 6000);
   }
 
-  async function leaveCurrentChannel() {
+  async function leaveCurrentChannel(message) {
     presence.setLocation({ state: "lobby", channelId: null });
     setCurrentChannel(null);
+    if (message) setVoiceNotice(message);
     await fetchChannels();
   }
+
+  const handleMovedToChannel = useCallback((channelId, message) => {
+    const nextChannel = channels.find((item) => item.id === channelId);
+    if (nextChannel) {
+      setCurrentChannel(nextChannel);
+      presence.setLocation({ state: "in_channel", channelId });
+      if (message) setVoiceNotice(message);
+    }
+  }, [channels, presence]);
 
   async function logout() {
   try {
@@ -212,6 +223,12 @@ if (!currentUser) {
 
   return (
     <>
+      {voiceNotice && (
+        <div className="nova-voice-notice">
+          <span>{voiceNotice}</span>
+          <button type="button" onClick={() => setVoiceNotice("")}>关闭</button>
+        </div>
+      )}
       <div className="main-layout">
         <aside className="sidebar">
           <div className="sidebar-main">
@@ -307,9 +324,11 @@ if (!currentUser) {
           ) : (
             <VoiceRoom
               channel={currentChannel}
+              channels={channels}
               currentUser={currentUser}
               apiBase={API_BASE}
               onLeave={leaveCurrentChannel}
+              onMovedToChannel={handleMovedToChannel}
               onChannelsChanged={fetchChannels}
               onPresenceLocationChange={presence.setLocation}
               onlineMembers={presence.members}
