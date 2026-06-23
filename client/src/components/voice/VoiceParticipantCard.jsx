@@ -1,36 +1,79 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Mic, MicOff, MoreHorizontal, Signal } from "lucide-react";
 import { formatLoss, qualityLabel } from "../../utils/voice-network";
+import { getParticipantMenuActions } from "../../utils/voice-member-menu";
 
 function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant }) {
   const [open, setOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const menuRef = useRef(null);
-  const canManage = !item.isLocal && ["admin", "member"].includes(currentUser?.role);
-  const canServerMute = canManage && currentUser?.role === "admin";
+  const buttonRef = useRef(null);
+  const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0 });
+  const menuActions = getParticipantMenuActions({ item, currentUser, currentChannel, channels });
+  const canManage = menuActions.length > 0;
+  const canServerMute = currentUser?.role === "admin" && canManage;
   const targetChannels = channels.filter((channel) => channel.id !== currentChannel.id);
+
+  const updateMenuPosition = () => {
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const menuWidth = 220;
+    const estimatedHeight = Math.min(360, Math.max(168, 44 * (canServerMute ? 3 : 2) + (moveOpen ? Math.max(1, targetChannels.length) * 38 : 0) + 18));
+    const margin = 10;
+    const left = Math.min(Math.max(margin, rect.right - menuWidth), window.innerWidth - menuWidth - margin);
+    const opensUp = rect.bottom + estimatedHeight + margin > window.innerHeight;
+    const top = opensUp ? Math.max(margin, rect.top - estimatedHeight - 6) : Math.min(rect.bottom + 6, window.innerHeight - margin);
+    setMenuStyle({ top, left });
+  };
+
+  useLayoutEffect(() => {
+    if (open) updateMenuPosition();
+  }, [open, moveOpen, targetChannels.length]);
 
   useEffect(() => {
     if (!open) return undefined;
     const close = (event) => {
-      if (event.key === "Escape" || (event.type === "mousedown" && !menuRef.current?.contains(event.target))) {
+      if (event.key === "Escape" || (event.type === "mousedown" && !menuRef.current?.contains(event.target) && !buttonRef.current?.contains(event.target))) {
         setOpen(false);
         setMoveOpen(false);
       }
     };
     document.addEventListener("mousedown", close);
+    const reposition = () => updateMenuPosition();
     document.addEventListener("keydown", close);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
     };
-  }, [open]);
+  }, [open, moveOpen, targetChannels.length]);
 
   const run = (action, targetChannelId) => {
     setOpen(false);
     setMoveOpen(false);
     onManageParticipant(action, item, targetChannelId);
   };
+
+  const menu = open ? (
+    <div className="voice-member-menu voice-member-menu-portal" ref={menuRef} style={menuStyle}>
+      {canServerMute && (
+        <button type="button" disabled={busy || anyBusy} onClick={() => run(item.serverMuted ? "unmute" : "mute")}>{item.serverMuted ? "解除服务器静音" : "服务器静音"}</button>
+      )}
+      <button type="button" disabled={busy || anyBusy} onClick={() => setMoveOpen((value) => !value)}>移动到其他频道</button>
+      {moveOpen && (
+        <div className="voice-channel-submenu">
+          {targetChannels.map((channel) => <button key={channel.id} type="button" disabled={busy || anyBusy} onClick={() => run("move", channel.id)}>{channel.name}</button>)}
+          {targetChannels.length === 0 && <span>没有可移动的频道</span>}
+        </div>
+      )}
+      <button type="button" disabled={busy || anyBusy} onClick={() => run("remove")}>移出当前频道</button>
+    </div>
+  ) : null;
 
   return (
     <article className={`voice-participant-card ${item.isSpeaking ? "speaking" : ""} ${busy ? "operating" : ""}`}>
@@ -46,25 +89,11 @@ function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, 
         {item.microphoneEnabled && !item.serverMuted ? <Mic size={17} /> : <MicOff size={17} />}
       </div>
       {canManage && (
-        <div className="voice-member-actions" ref={menuRef}>
-          <button type="button" className="voice-member-menu-button" onClick={() => setOpen((value) => !value)} disabled={busy || anyBusy} aria-label="成员操作菜单">
+        <div className="voice-member-actions">
+          <button ref={buttonRef} type="button" className="voice-member-menu-button" onClick={() => setOpen((value) => !value)} disabled={busy || anyBusy} aria-label="成员操作菜单">
             <MoreHorizontal size={17} />
           </button>
-          {open && (
-            <div className="voice-member-menu">
-              {canServerMute && (
-                <button type="button" disabled={busy || anyBusy} onClick={() => run(item.serverMuted ? "unmute" : "mute")}>{item.serverMuted ? "解除服务器静音" : "服务器静音"}</button>
-              )}
-              <button type="button" disabled={busy || anyBusy} onClick={() => setMoveOpen((value) => !value)}>移动到其他频道</button>
-              {moveOpen && (
-                <div className="voice-channel-submenu">
-                  {targetChannels.map((channel) => <button key={channel.id} type="button" disabled={busy || anyBusy} onClick={() => run("move", channel.id)}>{channel.name}</button>)}
-                  {targetChannels.length === 0 && <span>没有可移动的频道</span>}
-                </div>
-              )}
-              <button type="button" disabled={busy || anyBusy} onClick={() => run("remove")}>移出当前频道</button>
-            </div>
-          )}
+          {menu && createPortal(menu, document.body)}
         </div>
       )}
       {item.serverMuted && <div className="server-muted-badge">服务器静音</div>}

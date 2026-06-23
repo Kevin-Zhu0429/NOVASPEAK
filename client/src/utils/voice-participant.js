@@ -1,5 +1,5 @@
 import { Track } from "livekit-client";
-import { getPositionText } from "./user-display";
+import { getPositionText } from "./user-display.js";
 
 export function parseParticipantMetadata(participant) {
   let metadata = {};
@@ -21,17 +21,22 @@ export function parseParticipantMetadata(participant) {
   return { ...user, positionText: getPositionText(user, role ? "队员" : "身份未知") };
 }
 
+export function isParticipantServerMuted(participant) {
+  return parseParticipantMetadata(participant).serverMuted === true;
+}
+
 export function participantView(participant, isLocal = false) {
   const microphone = participant?.getTrackPublication?.(Track.Source.Microphone);
+  const metadata = parseParticipantMetadata(participant);
   return {
     id: participant?.identity || (isLocal ? "local" : "unknown"),
     participant,
     isLocal,
-    ...parseParticipantMetadata(participant),
+    ...metadata,
     isSpeaking: Boolean(participant?.isSpeaking),
     audioLevel: Number(participant?.audioLevel) || 0,
     connectionQuality: participant?.connectionQuality,
     microphoneEnabled: Boolean(microphone) && !microphone.isMuted,
-    serverMuted: parseParticipantMetadata(participant).serverMuted || participant?.permissions?.canPublish === false || (Array.isArray(participant?.permissions?.canPublishSources) && !participant.permissions.canPublishSources.includes(Track.Source.Microphone)),
+    serverMuted: isParticipantServerMuted(participant),
   };
 }
