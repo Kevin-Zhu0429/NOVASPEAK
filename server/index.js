@@ -30,6 +30,16 @@ import {
 } from "./guest-auth.js";
 import { createPresenceService } from "./presence.js";
 import { createVoiceManagementService } from "./voice-management.js";
+import {
+  assertChannelCapacity,
+  buildChannelPatch,
+  canEnterChannel,
+  getChannelById,
+  getLiveKitParticipantCount,
+  listChannelRows,
+  normalizeChannelName,
+  toPublicChannel,
+} from "./channels.js";
 
 dotenv.config();
 
@@ -679,115 +689,98 @@ app.put("/api/account/me/positions",
 
 app.get("/api/channels", requireAuthenticated, async (req, res) => {
   try {
-    const channels = db
-      .prepare(`
-        SELECT
-          id,
-          name,
-          owner_id AS ownerId,
-          is_default AS isDefault,
-          created_at AS createdAt
-        FROM channels
-        ORDER BY
-          is_default DESC,
-          created_at ASC
-      `)
-      .all();
-
+    const channels = listChannelRows(db).map(toPublicChannel);
     const result = await Promise.all(
-      channels.map((channel) =>
-        getChannelStatus(channel)
-      )
+      channels.map((channel) => getChannelStatus(channel))
     );
-
     res.json(result);
   } catch (error) {
     console.error("Get channels error:", error);
-
-    res.status(500).json({
-      error: "failed to get channels",
-    });
+    res.status(500).json({ error: "获取频道列表失败" });
   }
 });
 
 app.post("/api/channels", requireRegistered, (req, res) => {
   try {
-    const rawName = req.body?.name;
-
-    if (typeof rawName !== "string") {
-      return res.status(400).json({
-        error: "频道名称不能为空",
-      });
-    }
-
-    const channelName = rawName
-      .normalize("NFKC")
-      .trim();
-
-    if (
-      channelName.length < 1 ||
-      channelName.length > 30
-    ) {
-      return res.status(400).json({
-        error: "频道名称必须为 1—30 个字符",
-      });
-    }
-
-    const nameKey = channelName.toLocaleLowerCase();
-
-    const existingChannel = db
-      .prepare(`
-        SELECT id
-        FROM channels
-        WHERE name_key = ?
-      `)
-      .get(nameKey);
-
-    if (existingChannel) {
-      return res.status(409).json({
-        error: "该频道已经存在",
-      });
-    }
-
+    const normalized = normalizeChannelName(req.body?.name);
+    if (normalized.error) return res.status(400).json({ error: normalized.error });
+    const existingChannel = db.prepare(`SELECT id FROM channels WHERE name_key = ?`).get(normalized.nameKey);
+    if (existingChannel) return res.status(409).json({ error: "该频道已经存在" });
+    const maxOrder = db.prepare("SELECT COALESCE(MAX(sort_order), -10) AS maxOrder FROM channels").get().maxOrder;
     const newChannel = {
       id: `custom-${randomUUID()}`,
-      name: channelName,
-      nameKey,
-      ownerId: null,
+      name: normalized.name,
+      nameKey: normalized.nameKey,
+      ownerId: req.authUser.id,
+      sortOrder: maxOrder + 10,
       createdAt: Date.now(),
     };
-
     db.prepare(`
-      INSERT INTO channels (
-        id,
-        name,
-        name_key,
-        owner_id,
-        is_default,
-        created_at
-      )
-      VALUES (
-        @id,
-        @name,
-        @nameKey,
-        @ownerId,
-        0,
-        @createdAt
-      )
+      INSERT INTO channels (id, name, name_key, owner_id, is_default, description, sort_order, max_members, access_level, allow_guests, is_system, created_at)
+      VALUES (@id, @name, @nameKey, @ownerId, 0, '', @sortOrder, NULL, 'everyone', 1, 0, @createdAt)
     `).run(newChannel);
-
-    res.status(201).json({
-      id: newChannel.id,
-      name: newChannel.name,
-      participantCount: 0,
-      participants: [],
-    });
+    res.status(201).json({ ...toPublicChannel(getChannelById(db, newChannel.id)), participantCount: 0, participants: [] });
   } catch (error) {
     console.error("Create channel error:", error);
+    res.status(500).json({ error: "创建频道失败" });
+  }
+});
 
-    res.status(500).json({
-      error: "创建频道失败",
+app.patch("/api/channels/:channelId", requireAdmin, (req, res) => {
+  try {
+    const channel = getChannelById(db, req.params.channelId);
+    if (!channel) return res.status(404).json({ error: "频道不存在" });
+    const patch = buildChannelPatch(req.body);
+    if (patch.error) return res.status(400).json({ error: patch.error });
+    if (patch.nameKey) {
+      const existing = db.prepare("SELECT id FROM channels WHERE name_key = ? AND id <> ?").get(patch.nameKey, channel.id);
+      if (existing) return res.status(409).json({ error: "该频道已经存在" });
+    }
+    db.prepare(`
+      UPDATE channels SET
+        name = COALESCE(@name, name),
+        name_key = COALESCE(@nameKey, name_key),
+        description = COALESCE(@description, description),
+        sort_order = COALESCE(@sortOrder, sort_order),
+        max_members = @maxMembersValue,
+        access_level = COALESCE(@accessLevel, access_level),
+        allow_guests = COALESCE(@allowGuests, allow_guests)
+      WHERE id = @id
+    `).run({
+      id: channel.id,
+      name: patch.name ?? null,
+      nameKey: patch.nameKey ?? null,
+      description: patch.description ?? null,
+      sortOrder: patch.sortOrder ?? null,
+      maxMembersValue: Object.hasOwn(patch, "maxMembers") ? patch.maxMembers : channel.max_members,
+      accessLevel: patch.accessLevel ?? null,
+      allowGuests: Object.hasOwn(patch, "allowGuests") ? (patch.allowGuests ? 1 : 0) : null,
     });
+    res.json({ success: true, channel: toPublicChannel(getChannelById(db, channel.id)) });
+  } catch (error) {
+    console.error("Update channel error:", error);
+    res.status(500).json({ error: "修改频道失败" });
+  }
+});
+
+app.delete("/api/channels/:channelId", requireAdmin, async (req, res) => {
+  try {
+    const channel = getChannelById(db, req.params.channelId);
+    if (!channel) return res.status(404).json({ error: "频道不存在" });
+    if (channel.is_system) return res.status(409).json({ error: "系统默认频道不能删除" });
+    let participantCount;
+    try {
+      participantCount = await getLiveKitParticipantCount(roomService, channel.id);
+    } catch (error) {
+      console.error("Check channel occupancy error:", error);
+      return res.status(503).json({ error: "暂时无法确认频道占用状态，请稍后再试" });
+    }
+    if (participantCount > 0) return res.status(409).json({ error: "频道内仍有成员，无法删除" });
+    db.prepare("DELETE FROM channels WHERE id = ?").run(channel.id);
+    res.json({ success: true, deletedChannelId: channel.id });
+  } catch (error) {
+    console.error("Delete channel error:", error);
+    res.status(500).json({ error: "删除频道失败" });
   }
 });
 
@@ -801,11 +794,7 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
       });
     }
 
-    const channel = db.prepare(`
-      SELECT id
-      FROM channels
-      WHERE id = ?
-    `).get(room.trim());
+    const channel = getChannelById(db, room.trim());
 
     if (!channel) {
       return res.status(404).json({
@@ -814,6 +803,29 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
     }
 
     const user = req.authUser;
+
+    if (!canEnterChannel(channel, user)) {
+      return res.status(403).json({
+        error: "你没有权限进入该频道",
+      });
+    }
+
+    let capacity;
+    try {
+      capacity = await assertChannelCapacity({ roomService, channel });
+    } catch (error) {
+      console.error("Check channel capacity error:", error);
+      return res.status(503).json({
+        error: "暂时无法确认频道人数，请稍后再试",
+      });
+    }
+
+    if (!capacity.allowed) {
+      return res.status(capacity.status).json({
+        error: capacity.error,
+      });
+    }
+
     const participantIdentity = getVoiceParticipantIdentity(user, req.query.voiceConnectionId);
     const serverMute = voiceManagement.getTokenServerMute(participantIdentity, channel.id);
 

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { migrateChannels } from "./channels.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -158,70 +159,8 @@ db.prepare(`
     OR TRIM(display_name) = ''
 `).run();
 
-function normalizeKey(value) {
-  return value
-    .normalize("NFKC")
-    .trim()
-    .toLocaleLowerCase();
-}
 
-// 默认频道
-const defaultChannels = [
-  {
-    id: "lobby",
-    name: "大厅",
-  },
-  {
-    id: "cs2",
-    name: "CS2",
-  },
-  {
-    id: "delta-force",
-    name: "三角洲行动",
-  },
-  {
-    id: "apex",
-    name: "Apex",
-  },
-  {
-    id: "private-room",
-    name: "私人房间",
-  },
-];
-
-const insertDefaultChannel = db.prepare(`
-  INSERT OR IGNORE INTO channels (
-    id,
-    name,
-    name_key,
-    owner_id,
-    is_default,
-    created_at
-  )
-  VALUES (
-    @id,
-    @name,
-    @nameKey,
-    NULL,
-    1,
-    @createdAt
-  )
-`);
-
-const seedDefaultChannels = db.transaction(() => {
-  const createdAt = Date.now();
-
-  for (const channel of defaultChannels) {
-    insertDefaultChannel.run({
-      id: channel.id,
-      name: channel.name,
-      nameKey: normalizeKey(channel.name),
-      createdAt,
-    });
-  }
-});
-
-seedDefaultChannels();
+migrateChannels(db);
 
 console.log(`SQLite database ready: ${databasePath}`);
 
