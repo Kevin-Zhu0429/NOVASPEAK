@@ -74,6 +74,17 @@ const voiceManagement = createVoiceManagementService({
   channelLookup: (id) => db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
 });
 
+function normalizeVoiceConnectionId(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  return /^[a-zA-Z0-9_-]{12,80}$/.test(trimmed) ? trimmed : "";
+}
+
+function getVoiceParticipantIdentity(user, voiceConnectionId) {
+  const connectionId = normalizeVoiceConnectionId(voiceConnectionId);
+  return connectionId ? `${user.id}:voice:${connectionId}` : user.id;
+}
+
 async function getChannelStatus(channel) {
   try {
     const participants = await roomService.listParticipants(channel.id);
@@ -803,12 +814,14 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
     }
 
     const user = req.authUser;
+    const participantIdentity = getVoiceParticipantIdentity(user, req.query.voiceConnectionId);
+    const serverMute = voiceManagement.getTokenServerMute(participantIdentity, channel.id);
 
     const at = new AccessToken(
       process.env.LIVEKIT_API_KEY,
       process.env.LIVEKIT_API_SECRET,
       {
-        identity: user.id,
+        identity: participantIdentity,
         name: user.displayName,
         metadata: JSON.stringify({
           displayName: user.displayName,
@@ -816,6 +829,7 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
           isGuest: user.isGuest,
           positions: user.positions || [],
           positionNames: user.positionNames || [],
+          serverMuted: serverMute.serverMuted,
         }),
       }
     );
@@ -823,9 +837,10 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
     at.addGrant({
       room: channel.id,
       roomJoin: true,
-      canPublish: true,
+      canPublish: !serverMute.serverMuted,
       canSubscribe: true,
       canPublishData: true,
+      ...(serverMute.serverMuted ? { canPublishSources: [] } : {}),
     });
 
     const token = await at.toJwt();
@@ -833,6 +848,8 @@ app.get("/api/token", requireAuthenticated, async (req, res) => {
     res.json({
       token,
       url: process.env.LIVEKIT_URL,
+      serverMuted: serverMute.serverMuted,
+      participantIdentity,
     });
   } catch (error) {
     console.error("Token error:", error);
@@ -1353,11 +1370,13 @@ function sendVoiceManagementResult(res, result, successMessage) {
   }
   return res.json({
     success: true,
+    ok: true,
     message: successMessage(result),
     serverMuted: result.serverMuted,
     participantName: result.participantName,
     targetChannelName: result.targetChannelName,
     idempotent: Boolean(result.idempotent),
+    alreadyMuted: Boolean(result.alreadyMuted),
   });
 }
 

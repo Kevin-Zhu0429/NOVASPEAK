@@ -7,7 +7,7 @@ import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
-import { isParticipantServerMuted, participantView } from "../../utils/voice-participant";
+import { getLocalServerMuteTransition, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
 
@@ -58,6 +58,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const refreshDevicesRef = useRef(null);
   const devices = useAudioDevices(devicesOpen || Boolean(room));
   const refreshDevices = devices.refresh;
+  const previousLocalServerMutedRef = useRef(null);
+  const localServerMuteInitializedRef = useRef(false);
+  const voiceConnectionIdRef = useRef(null);
+  if (!voiceConnectionIdRef.current) {
+    const storageKey = "novaVoiceConnectionId";
+    const existing = typeof window !== "undefined" ? window.sessionStorage?.getItem(storageKey) : "";
+    voiceConnectionIdRef.current = existing || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    if (typeof window !== "undefined" && !existing) window.sessionStorage?.setItem(storageKey, voiceConnectionIdRef.current);
+  }
   const networkStats = useVoiceNetworkStats(room, status === "connected" || status === "restored", baselineVersion);
 
 
@@ -68,13 +77,25 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   useEffect(() => { onPresenceLocationChangeRef.current = onPresenceLocationChange; }, [onPresenceLocationChange]);
   useEffect(() => { refreshDevicesRef.current = refreshDevices; }, [refreshDevices]);
 
-  const syncParticipants = useCallback((activeRoom) => {
+  const syncLocalServerMuteStatus = useCallback((activeRoom, { notify = false } = {}) => {
+    if (!activeRoom?.localParticipant) return false;
+    const current = isParticipantServerMuted(activeRoom.localParticipant);
+    const transition = getLocalServerMuteTransition(previousLocalServerMutedRef.current, current, localServerMuteInitializedRef.current);
+    previousLocalServerMutedRef.current = transition.current;
+    localServerMuteInitializedRef.current = true;
+    if (transition.current) setMicrophoneEnabled(false);
+    if (notify && transition.message) setOperationMessage(transition.message);
+    return transition.current;
+  }, []);
+
+  const syncParticipants = useCallback((activeRoom, options = {}) => {
     if (!activeRoom) return;
+    syncLocalServerMuteStatus(activeRoom, options);
     setParticipants([
       participantView(activeRoom.localParticipant, true),
       ...Array.from(activeRoom.remoteParticipants.values()).map((participant) => participantView(participant)),
     ]);
-  }, []);
+  }, [syncLocalServerMuteStatus]);
 
   const cleanupAudio = useCallback(() => {
     for (const { track, element } of audioElements.current.values()) {
@@ -103,7 +124,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     });
 
     const valid = () => generation.current === currentGeneration && isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId });
-    const sync = () => valid() && syncParticipants(activeRoom);
+    const sync = (options = {}) => valid() && syncParticipants(activeRoom, options);
     const attachAudio = (track, publication) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
       const element = track.attach();
@@ -168,8 +189,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.TrackUnmuted, sync)
       .on(RoomEvent.TrackPublished, sync)
       .on(RoomEvent.TrackUnpublished, sync)
-      .on(RoomEvent.ParticipantMetadataChanged, sync)
-      .on(RoomEvent.ParticipantPermissionsChanged, () => { if (!valid()) return; sync(); const local = activeRoom.localParticipant; if (isParticipantServerMuted(local)) { setMicrophoneEnabled(false); setOperationMessage("你已被服务器静音"); } else { setOperationMessage("服务器静音已解除，请自行开启麦克风"); } })
+      .on(RoomEvent.ParticipantMetadataChanged, (metadata, participant) => sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }))
+      .on(RoomEvent.ParticipantPermissionsChanged, (participant) => { if (!valid()) return; sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }); })
       .on(RoomEvent.TrackSubscribed, (track, publication) => { if (!valid()) return; attachAudio(track, publication); sync(); })
       .on(RoomEvent.TrackUnsubscribed, (track, publication) => { if (!valid()) return; detachAudio(track, publication); sync(); })
       .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
@@ -179,7 +200,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       try {
         disconnectReasonRef.current = "connect-start";
         voiceLifecycleDebug("connect-start", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
-        const response = await fetch(`${apiBase}/api/token?room=${encodeURIComponent(channel.id)}`, { credentials: "include" });
+        const response = await fetch(`${apiBase}/api/token?room=${encodeURIComponent(channel.id)}&voiceConnectionId=${encodeURIComponent(voiceConnectionIdRef.current)}`, { credentials: "include" });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error("语音服务返回了无效响应");
         const data = await response.json();
@@ -187,6 +208,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         if (!data.token || !data.url) throw new Error("语音服务配置不完整");
         if (!valid()) return;
         await activeRoom.connect(data.url, data.token);
+        syncLocalServerMuteStatus(activeRoom, { notify: false });
         if (!valid()) return;
         disconnectReasonRef.current = "connect-resolved";
         voiceLifecycleDebug("connect-resolved", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
@@ -340,6 +362,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "成员操作失败");
       setOperationMessage(data.message || "操作成功");
+      if ((action === "mute" || action === "unmute") && typeof data.serverMuted === "boolean") {
+        setParticipants((previous) => previous.map((item) => item.id === participant.id ? { ...item, serverMuted: data.serverMuted } : item));
+      }
       await onChannelsChanged();
     } catch (operationError) {
       console.error("成员语音管理失败：", operationError);

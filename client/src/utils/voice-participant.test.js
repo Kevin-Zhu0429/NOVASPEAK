@@ -29,3 +29,13 @@ test("local microphone mute is not server mute", () => {
   assert.equal(view.microphoneEnabled, false);
   assert.equal(view.serverMuted, false);
 });
+
+
+test("local server mute notifications are edge-triggered", async () => {
+  const { getLocalServerMuteTransition } = await import("./voice-participant.js");
+  assert.deepEqual(getLocalServerMuteTransition(undefined, false, false), { current: false, message: "" });
+  assert.deepEqual(getLocalServerMuteTransition(null, false, false), { current: false, message: "" });
+  assert.deepEqual(getLocalServerMuteTransition(false, false, true), { current: false, message: "" });
+  assert.deepEqual(getLocalServerMuteTransition(true, false, true), { current: false, message: "服务器静音已解除，请自行开启麦克风" });
+  assert.deepEqual(getLocalServerMuteTransition(false, true, true), { current: true, message: "你已被服务器静音" });
+});

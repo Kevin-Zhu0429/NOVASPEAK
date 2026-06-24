@@ -74,3 +74,53 @@ test("remove and move call real LiveKit wrapper methods and update only source c
   await service.move({ actor: member, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
   assert.deepEqual(calls.find((call) => call[0] === "move"), ["move", "cs2", "target-id", "apex"]);
 });
+
+
+test("muted member move migrates canonical record and reapplies metadata and permissions", async () => {
+  const targetByRoom = {
+    cs2: { ...target },
+    apex: { ...target, metadata: JSON.stringify({ displayName: "目标成员", role: "admin" }), permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] } },
+  };
+  const calls = [];
+  const service = createVoiceManagementService({
+    retryDelayMs: 1,
+    roomService: {
+      async listParticipants(room) { calls.push(["list", room]); return [targetByRoom[room]].filter(Boolean); },
+      async mutePublishedTrack(room, identity, trackSid, muted) { calls.push(["muteTrack", room, identity, trackSid, muted]); },
+      async updateParticipant(room, identity, options) { calls.push(["update", room, identity, options]); targetByRoom[room] = { ...targetByRoom[room], metadata: options.metadata, permission: options.permission }; },
+      async removeParticipant() {},
+      async moveParticipant(room, identity, destination) { calls.push(["move", room, identity, destination]); targetByRoom[destination] = { ...targetByRoom[room], metadata: "{}", permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] } }; delete targetByRoom[room]; },
+    },
+    channelLookup(id) { return { cs2: { id: "cs2", name: "CS2" }, apex: { id: "apex", name: "Apex" } }[id] || null; },
+  });
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  await service.move({ actor: member, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.equal(service.getServerMuteState("target-id").currentRoomName, "apex");
+  assert.equal(JSON.parse(targetByRoom.apex.metadata).serverMuted, true);
+  assert.equal(targetByRoom.apex.permission.canPublishSources.includes(2), false);
+  const unmuted = await service.unmute({ actor: admin, sourceChannelId: "apex", participantIdentity: "target-id" });
+  assert.equal(unmuted.serverMuted, false);
+  assert.equal(JSON.parse(targetByRoom.apex.metadata).serverMuted, false);
+  assert.deepEqual(targetByRoom.apex.permission, target.permission);
+});
+
+test("token server mute lookup updates room without muting other connection identities", async () => {
+  const { service } = makeService({ participants: [{ ...target, identity: "user-id:voice:tab-a" }] });
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "user-id:voice:tab-a" });
+  const muted = service.getTokenServerMute("user-id:voice:tab-a", "apex");
+  const otherTab = service.getTokenServerMute("user-id:voice:tab-b", "apex");
+  assert.equal(muted.serverMuted, true);
+  assert.equal(service.getServerMuteState("user-id:voice:tab-a").currentRoomName, "apex");
+  assert.equal(otherTab.serverMuted, false);
+});
+
+test("repeat mute repairs missing metadata and restored permissions", async () => {
+  const mutable = { ...target };
+  const { service } = makeService({ participants: [mutable] });
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  mutable.metadata = JSON.stringify({ displayName: "目标成员" });
+  mutable.permission = { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] };
+  const repaired = await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  assert.equal(repaired.alreadyMuted, true);
+  assert.equal(repaired.serverMuted, true);
+});
