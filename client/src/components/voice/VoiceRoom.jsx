@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectionState, Room, RoomEvent, Track } from "livekit-client";
+import { Room, RoomEvent, Track } from "livekit-client";
 import AudioDevicePanel from "./AudioDevicePanel";
 import ConnectionStatus from "./ConnectionStatus";
 import NetworkStats from "./NetworkStats";
@@ -9,8 +9,14 @@ import useAudioDevices from "../../hooks/useAudioDevices";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
 import { isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
+import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
 
 const CHAT_TOPIC = "nova-chat";
+
+function voiceLifecycleDebug(label, details) {
+  if (typeof window === "undefined" || window.localStorage?.getItem("novaVoiceDebug") !== "1") return;
+  console.debug(`[voice-room] ${label}`, details);
+}
 
 function microphoneError(error) {
   if (error?.name === "NotAllowedError" || error?.name === "PermissionDeniedError") return "麦克风权限被拒绝";
@@ -41,10 +47,26 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const deafenRef = useRef(false);
   const restoreMicrophone = useRef(false);
   const generation = useRef(0);
+  const connectAttemptRef = useRef(0);
   const movedRef = useRef(false);
+  const disconnectReasonRef = useRef("");
+  const channelsRef = useRef(channels);
+  const onLeaveRef = useRef(onLeave);
+  const onMovedToChannelRef = useRef(onMovedToChannel);
+  const onChannelsChangedRef = useRef(onChannelsChanged);
+  const onPresenceLocationChangeRef = useRef(onPresenceLocationChange);
+  const refreshDevicesRef = useRef(null);
   const devices = useAudioDevices(devicesOpen || Boolean(room));
   const refreshDevices = devices.refresh;
   const networkStats = useVoiceNetworkStats(room, status === "connected" || status === "restored", baselineVersion);
+
+
+  useEffect(() => { channelsRef.current = channels; }, [channels]);
+  useEffect(() => { onLeaveRef.current = onLeave; }, [onLeave]);
+  useEffect(() => { onMovedToChannelRef.current = onMovedToChannel; }, [onMovedToChannel]);
+  useEffect(() => { onChannelsChangedRef.current = onChannelsChanged; }, [onChannelsChanged]);
+  useEffect(() => { onPresenceLocationChangeRef.current = onPresenceLocationChange; }, [onPresenceLocationChange]);
+  useEffect(() => { refreshDevicesRef.current = refreshDevices; }, [refreshDevices]);
 
   const syncParticipants = useCallback((activeRoom) => {
     if (!activeRoom) return;
@@ -64,11 +86,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
   useEffect(() => {
     const currentGeneration = ++generation.current;
+    const attemptId = ++connectAttemptRef.current;
+    let disposed = false;
     movedRef.current = false;
+    disconnectReasonRef.current = "connect-attempt-created";
     const activeRoom = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = activeRoom;
+    voiceLifecycleDebug("connect-attempt-created", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
     queueMicrotask(() => {
-      if (generation.current === currentGeneration) {
+      if (isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId })) {
         setRoom(activeRoom);
         setStatus("connecting");
         setError("");
@@ -76,7 +102,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       }
     });
 
-    const valid = () => generation.current === currentGeneration;
+    const valid = () => generation.current === currentGeneration && isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId });
     const sync = () => valid() && syncParticipants(activeRoom);
     const attachAudio = (track, publication) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
@@ -107,30 +133,31 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       }
     };
     const onDisconnected = (disconnectReason) => {
+      if (disposed || !valid()) return;
       const outcome = getDisconnectOutcome(disconnectReason, { moved: movedRef.current, roomMatches: roomRef.current === activeRoom });
-      if (!valid() || outcome.action === "ignore") return;
+      if (outcome.action === "ignore") return;
       setStatus("failed");
       setError(outcome.message || "");
       setMicrophoneEnabled(false);
       cleanupAudio();
-      onPresenceLocationChange({ state: "lobby", channelId: null });
-      if (outcome.removed) onLeave?.(outcome.message);
+      onPresenceLocationChangeRef.current?.({ state: "lobby", channelId: null });
+      if (outcome.removed) onLeaveRef.current?.(outcome.message);
     };
     const onMoved = (targetRoomName) => {
-      if (!valid() || roomRef.current !== activeRoom) return;
-      const target = resolveMovedChannel(targetRoomName || activeRoom.name, channels);
+      if (!valid()) return;
+      const target = resolveMovedChannel(targetRoomName || activeRoom.name, channelsRef.current);
       if (!target) return;
       movedRef.current = true;
       setError("");
       setStatus("connected");
-      onMovedToChannel?.(target.id, `你已被移动到“${target.name}”`);
-      onPresenceLocationChange({ state: "in_channel", channelId: target.id });
+      onMovedToChannelRef.current?.(target.id, `你已被移动到“${target.name}”`);
+      onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: target.id });
     };
 
     activeRoom
-      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChanged(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
-      .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); onPresenceLocationChange({ state: "reconnecting", channelId: channel.id }); } })
-      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); onPresenceLocationChange({ state: "in_channel", channelId: channel.id }); } })
+      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChangedRef.current?.(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
+      .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); onPresenceLocationChangeRef.current?.({ state: "reconnecting", channelId: channel.id }); } })
+      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
       .on(RoomEvent.Moved, onMoved)
       .on(RoomEvent.Disconnected, onDisconnected)
       .on(RoomEvent.ParticipantConnected, sync)
@@ -142,14 +169,16 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.TrackPublished, sync)
       .on(RoomEvent.TrackUnpublished, sync)
       .on(RoomEvent.ParticipantMetadataChanged, sync)
-      .on(RoomEvent.ParticipantPermissionsChanged, () => { sync(); const local = activeRoom.localParticipant; if (isParticipantServerMuted(local)) { setMicrophoneEnabled(false); setOperationMessage("你已被服务器静音"); } else { setOperationMessage("服务器静音已解除，请自行开启麦克风"); } })
-      .on(RoomEvent.TrackSubscribed, (track, publication) => { attachAudio(track, publication); sync(); })
-      .on(RoomEvent.TrackUnsubscribed, (track, publication) => { detachAudio(track, publication); sync(); })
+      .on(RoomEvent.ParticipantPermissionsChanged, () => { if (!valid()) return; sync(); const local = activeRoom.localParticipant; if (isParticipantServerMuted(local)) { setMicrophoneEnabled(false); setOperationMessage("你已被服务器静音"); } else { setOperationMessage("服务器静音已解除，请自行开启麦克风"); } })
+      .on(RoomEvent.TrackSubscribed, (track, publication) => { if (!valid()) return; attachAudio(track, publication); sync(); })
+      .on(RoomEvent.TrackUnsubscribed, (track, publication) => { if (!valid()) return; detachAudio(track, publication); sync(); })
       .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
       .on(RoomEvent.DataReceived, onData);
 
     (async () => {
       try {
+        disconnectReasonRef.current = "connect-start";
+        voiceLifecycleDebug("connect-start", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
         const response = await fetch(`${apiBase}/api/token?room=${encodeURIComponent(channel.id)}`, { credentials: "include" });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error("语音服务返回了无效响应");
@@ -158,7 +187,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         if (!data.token || !data.url) throw new Error("语音服务配置不完整");
         if (!valid()) return;
         await activeRoom.connect(data.url, data.token);
-        if (!valid()) { activeRoom.disconnect(); return; }
+        if (!valid()) return;
+        disconnectReasonRef.current = "connect-resolved";
+        voiceLifecycleDebug("connect-resolved", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
         try {
           await activeRoom.localParticipant.setMicrophoneEnabled(true);
           if (valid()) setMicrophoneEnabled(true);
@@ -166,28 +197,31 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
           console.error("麦克风启用失败：", micError);
           if (valid()) setError(microphoneError(micError));
         }
-        refreshDevices();
+        refreshDevicesRef.current?.();
         sync();
       } catch (connectError) {
+        if (shouldIgnoreConnectErrorForAttempt({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId })) return;
+        disconnectReasonRef.current = "connect-rejected";
+        voiceLifecycleDebug("connect-rejected", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, message: connectError?.message });
         console.error("连接语音频道失败：", connectError);
-        if (valid()) {
-          setStatus("failed");
-          setError(connectError.message || "无法连接语音频道");
-        }
+        setStatus("failed");
+        setError(connectError.message || "无法连接语音频道");
       }
     })();
 
     return () => {
+      disposed = true;
       generation.current += 1;
+      disconnectReasonRef.current = "effect-cleanup";
+      voiceLifecycleDebug("effect-cleanup", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, reason: "effect-cleanup" });
       activeRoom.off(RoomEvent.Moved, onMoved);
       activeRoom.off(RoomEvent.Disconnected, onDisconnected);
       activeRoom.removeAllListeners();
       cleanupAudio();
-      if (activeRoom.state !== ConnectionState.Disconnected) activeRoom.disconnect();
-      if (!movedRef.current && roomRef.current === activeRoom) onPresenceLocationChange({ state: "lobby", channelId: null });
-      if (roomRef.current === activeRoom) roomRef.current = null;
+      const disconnected = cleanupVoiceRoomAttempt({ room: activeRoom, roomRef, disconnectReasonRef, reason: "effect-cleanup" });
+      if (disconnected) voiceLifecycleDebug("disconnect-called", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, reason: "effect-cleanup" });
     };
-  }, [apiBase, channel.id, channels, cleanupAudio, refreshDevices, onChannelsChanged, onMovedToChannel, onPresenceLocationChange, retryVersion, syncParticipants]);
+  }, [apiBase, channel.id, retryVersion, cleanupAudio, syncParticipants]);
 
   const toggleMicrophone = async () => {
     const activeRoom = roomRef.current;
