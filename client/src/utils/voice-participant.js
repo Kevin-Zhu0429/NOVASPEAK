@@ -40,3 +40,11 @@ export function participantView(participant, isLocal = false) {
     serverMuted: isParticipantServerMuted(participant),
   };
 }
+
+export function getLocalServerMuteTransition(previousValue, currentValue, initialized) {
+  const current = currentValue === true;
+  if (!initialized) return { current, message: "" };
+  if (previousValue === true && current === false) return { current, message: "服务器静音已解除，请自行开启麦克风" };
+  if (previousValue === false && current === true) return { current, message: "你已被服务器静音" };
+  return { current, message: "" };
+}
