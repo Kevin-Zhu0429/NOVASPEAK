@@ -10,7 +10,7 @@ import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
 import usePresence from "./hooks/usePresence";
 import { getPositionText } from "./utils/user-display";
-import { sortChannels } from "./utils/channel-settings";
+import { normalizeUserMessage, sortChannels } from "./utils/channel-settings";
 import "./App.css";
 
 
@@ -90,6 +90,16 @@ export default function App() {
     channelRequestIdRef.current += 1;
   }, []);
 
+  const applyChannels = useCallback(function applyChannels(nextChannels) {
+    if (!Array.isArray(nextChannels)) return;
+    const sortedData = sortChannels(nextChannels);
+    setChannels(sortedData);
+    setCurrentChannel((current) => {
+      if (!current) return current;
+      return sortedData.find((channel) => channel.id === current.id) || current;
+    });
+  }, []);
+
   const fetchChannels = useCallback(async function fetchChannels() {
     const requestId = ++channelRequestIdRef.current;
     try {
@@ -114,11 +124,7 @@ export default function App() {
 
       const sortedData = sortChannels(data);
       lastChannelFetchErrorRef.current = "";
-      setChannels(sortedData);
-      setCurrentChannel((current) => {
-        if (!current) return current;
-        return sortedData.find((channel) => channel.id === current.id) || current;
-      });
+      applyChannels(sortedData);
       return sortedData;
     } catch (error) {
       if (requestId !== channelRequestIdRef.current) return null;
@@ -129,7 +135,7 @@ export default function App() {
       }
       return null;
     }
-  }, []);
+  }, [applyChannels]);
 
   useEffect(() => {
     if (!currentUser) return undefined;
@@ -174,7 +180,8 @@ export default function App() {
   async function leaveCurrentChannel(message) {
     presence.setLocation({ state: "lobby", channelId: null });
     setCurrentChannel(null);
-    if (message) setVoiceNotice(message);
+    const safeMessage = normalizeUserMessage(message);
+    if (safeMessage) setVoiceNotice(safeMessage);
     await fetchChannels();
   }
 
@@ -183,7 +190,8 @@ export default function App() {
     if (nextChannel) {
       setCurrentChannel(nextChannel);
       presence.setLocation({ state: "in_channel", channelId });
-      if (message) setVoiceNotice(message);
+      const safeMessage = normalizeUserMessage(message);
+      if (safeMessage) setVoiceNotice(safeMessage);
     }
   }, [channels, presence]);
 
@@ -384,7 +392,7 @@ if (!currentUser) {
           <ChannelManagementPanel
             channels={channels}
             apiBase={API_BASE}
-            onRefreshChannels={fetchChannels}
+            onRefreshChannels={(nextChannels) => { if (Array.isArray(nextChannels)) applyChannels(nextChannels); else return fetchChannels(); }}
             onInvalidateChannels={invalidateChannelRequests}
             onClose={() => setShowChannelManagement(false)}
           />

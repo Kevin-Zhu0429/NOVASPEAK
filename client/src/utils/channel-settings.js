@@ -130,3 +130,27 @@ export async function extractApiError(response, fallback = "请求失败") {
     return fallback;
   }
 }
+
+
+export function normalizeUserMessage(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message || fallback;
+  return fallback;
+}
+
+export function shouldResetChannelDraft({ currentChannelId, nextChannelId, isDirty }) {
+  if (!currentChannelId) return true;
+  if (currentChannelId !== nextChannelId) return true;
+  return !isDirty;
+}
+
+export function buildReorderedChannelIds(channels, index, direction) {
+  const sorted = sortChannels(channels);
+  const targetIndex = direction === "up" ? index - 1 : direction === "down" ? index + 1 : -1;
+  if (targetIndex < 0 || targetIndex >= sorted.length || index < 0 || index >= sorted.length) {
+    return { error: direction === "up" ? "该频道已经在最上方" : "该频道已经在最下方" };
+  }
+  const channelIds = sorted.map((channel) => channel.id);
+  [channelIds[index], channelIds[targetIndex]] = [channelIds[targetIndex], channelIds[index]];
+  return { channelIds };
+}

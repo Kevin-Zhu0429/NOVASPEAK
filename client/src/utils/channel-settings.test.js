@@ -14,6 +14,9 @@ import {
   getChannelFormInitialValues,
   parseMaxMembers,
   sortChannels,
+  normalizeUserMessage,
+  shouldResetChannelDraft,
+  buildReorderedChannelIds,
 } from "./channel-settings.js";
 
 const channels = [
@@ -125,4 +128,26 @@ test("PATCH payload keeps false and null values", () => {
   const result = buildChannelPatchPayload({ name: "A", description: "", maxMembersMode: "unlimited", maxMembers: "", accessLevel: "everyone", allowGuests: false });
   assert.equal(result.payload.allowGuests, false);
   assert.equal(result.payload.maxMembers, null);
+});
+
+test("normalizes user-visible messages safely", () => {
+  assert.equal(normalizeUserMessage("已退出语音频道"), "已退出语音频道");
+  assert.equal(normalizeUserMessage(undefined), "");
+  assert.equal(normalizeUserMessage({ type: "click" }, "备用提示"), "备用提示");
+  assert.equal(normalizeUserMessage(new Error("连接失败"), "备用提示"), "连接失败");
+});
+
+test("dirty channel draft is not reset by same channel reference refresh", () => {
+  assert.equal(shouldResetChannelDraft({ currentChannelId: "a", nextChannelId: "a", isDirty: true }), false);
+  assert.equal(shouldResetChannelDraft({ currentChannelId: "a", nextChannelId: "b", isDirty: true }), true);
+  assert.equal(shouldResetChannelDraft({ currentChannelId: "a", nextChannelId: "a", isDirty: false }), true);
+});
+
+test("buildReorderedChannelIds moves up and down without mutating input", () => {
+  const input = [{ id: "a", sortOrder: 0 }, { id: "b", sortOrder: 0 }, { id: "c", sortOrder: 0 }];
+  assert.deepEqual(buildReorderedChannelIds(input, 1, "up").channelIds, ["b", "a", "c"]);
+  assert.deepEqual(buildReorderedChannelIds(input, 1, "down").channelIds, ["a", "c", "b"]);
+  assert.deepEqual(input.map((channel) => channel.id), ["a", "b", "c"]);
+  assert.equal(buildReorderedChannelIds(input, 0, "up").error, "该频道已经在最上方");
+  assert.equal(buildReorderedChannelIds(input, 2, "down").error, "该频道已经在最下方");
 });

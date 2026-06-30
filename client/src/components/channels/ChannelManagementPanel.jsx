@@ -3,8 +3,7 @@ import { createPortal } from "react-dom";
 import ChannelEditForm from "./ChannelEditForm";
 import DeleteChannelDialog from "./DeleteChannelDialog";
 import {
-  calculateMoveDownSortPatches,
-  calculateMoveUpSortPatches,
+  buildReorderedChannelIds,
   canDeleteChannel,
   canMoveChannelDown,
   canMoveChannelUp,
@@ -31,6 +30,14 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [busy, onClose]);
 
+  function setSafeMessage(value, fallback = "") {
+    setMessage(typeof value === "string" ? value : fallback);
+  }
+
+  function setSafeError(value, fallback = "") {
+    setError(value instanceof Error ? value.message : typeof value === "string" ? value : fallback);
+  }
+
   async function patchChannel(channelId, payload, fallback) {
     const response = await fetch(`${apiBase}/api/channels/${encodeURIComponent(channelId)}`, {
       method: "PATCH",
@@ -48,37 +55,48 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
     if (!editingChannel) return;
     onInvalidateChannels?.();
     setBusy(true);
-    setMessage("正在保存…");
+    setSafeMessage("正在保存…");
     setError("");
     try {
       await patchChannel(editingChannel.id, payload, "修改频道失败");
-      setMessage("频道设置已保存");
+      setSafeMessage("频道设置已保存");
       setEditingId(null);
       await onRefreshChannels();
     } catch (requestError) {
       setMessage("");
-      setError(requestError.message || "修改频道失败");
+      setSafeError(requestError, "修改频道失败");
     } finally {
       setBusy(false);
     }
   }
 
   async function moveChannel(index, direction) {
-    const result = direction === "up" ? calculateMoveUpSortPatches(sortedChannels, index) : calculateMoveDownSortPatches(sortedChannels, index);
+    const result = buildReorderedChannelIds(sortedChannels, index, direction);
     if (result.error) return;
+    const current = sortedChannels[index];
+    const adjacent = sortedChannels[direction === "up" ? index - 1 : index + 1];
+    console.info("[channel-reorder] request", { channelId: current?.id, sortOrder: current?.sortOrder, adjacentChannelId: adjacent?.id, adjacentSortOrder: adjacent?.sortOrder });
     onInvalidateChannels?.();
     setBusy(true);
-    setMessage("正在调整排序…");
+    setSafeMessage("正在调整排序…");
     setError("");
     try {
-      for (const patch of result.patches) {
-        await patchChannel(patch.id, { sortOrder: patch.sortOrder }, "调整频道排序失败");
-      }
-      setMessage("频道排序已更新");
-      await onRefreshChannels();
+      const response = await fetch(`${apiBase}/api/channels/reorder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ channelIds: result.channelIds }),
+      });
+      if (!response.ok) throw new Error(await extractApiError(response, "调整频道排序失败"));
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) throw new Error("调整频道排序失败");
+      const data = await response.json();
+      setSafeMessage("频道排序已更新");
+      if (Array.isArray(data.channels)) await onRefreshChannels(data.channels);
+      else await onRefreshChannels();
     } catch (requestError) {
       setMessage("");
-      setError(requestError.message || "调整频道排序失败");
+      setSafeError(requestError, "调整频道排序失败");
       await onRefreshChannels();
     } finally {
       setBusy(false);
@@ -102,10 +120,10 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error("删除频道失败");
       setPendingDelete(null);
-      setMessage("频道已删除");
+      setSafeMessage("频道已删除");
       await onRefreshChannels();
     } catch (requestError) {
-      setError(requestError.message || "删除频道失败");
+      setSafeError(requestError, "删除频道失败");
     } finally {
       setBusy(false);
     }

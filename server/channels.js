@@ -170,3 +170,31 @@ export function buildChannelPatch(body) {
   if (Object.hasOwn(body, "allowGuests")) Object.assign(patch, normalizeAllowGuests(body.allowGuests));
   return patch.error ? { error: patch.error } : patch;
 }
+
+
+export function validateChannelReorder(currentIds, channelIds) {
+  if (!Array.isArray(channelIds) || !channelIds.every((id) => typeof id === "string")) {
+    return { error: "频道排序必须提供频道 ID 数组" };
+  }
+  const uniqueIds = new Set(channelIds);
+  if (uniqueIds.size !== channelIds.length) return { error: "频道排序包含重复频道" };
+  const currentSet = new Set(currentIds);
+  if (currentSet.size !== currentIds.length) return { error: "当前频道数据异常，无法排序" };
+  if (channelIds.length !== currentIds.length) return { error: "频道排序必须包含所有当前频道" };
+  const missing = currentIds.filter((id) => !uniqueIds.has(id));
+  const unknown = channelIds.filter((id) => !currentSet.has(id));
+  if (missing.length || unknown.length) return { error: "频道排序必须与当前频道完全匹配" };
+  return { channelIds };
+}
+
+export function reorderChannels(db, channelIds) {
+  const currentIds = listChannelRows(db).map((row) => row.id);
+  const validation = validateChannelReorder(currentIds, channelIds);
+  if (validation.error) return validation;
+  const update = db.prepare("UPDATE channels SET sort_order = ? WHERE id = ?");
+  const apply = db.transaction((ids) => {
+    ids.forEach((id, index) => update.run(index, id));
+  });
+  apply(channelIds);
+  return { channels: listChannelRows(db).map(toPublicChannel) };
+}

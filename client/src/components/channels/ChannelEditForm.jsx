@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   buildChannelPatchPayload,
   canToggleGuests,
@@ -8,13 +8,21 @@ import {
 export default function ChannelEditForm({ channel, onCancel, onSave, saving }) {
   const [form, setForm] = useState(() => getChannelFormInitialValues(channel));
   const [error, setError] = useState("");
+  const [isDirty, setIsDirty] = useState(false);
+  const editingChannelIdRef = useRef(channel?.id || null);
 
   useEffect(() => {
-    setForm(getChannelFormInitialValues(channel));
-    setError("");
+    const nextChannelId = channel?.id || null;
+    if (editingChannelIdRef.current !== nextChannelId) {
+      editingChannelIdRef.current = nextChannelId;
+      setForm(getChannelFormInitialValues(channel));
+      setError("");
+      setIsDirty(false);
+    }
   }, [channel]);
 
   function updateField(name, value) {
+    setIsDirty(true);
     setForm((current) => {
       const next = { ...current, [name]: value };
       if (name === "accessLevel" && value !== "everyone") next.allowGuests = false;
