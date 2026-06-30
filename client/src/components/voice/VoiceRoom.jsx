@@ -378,7 +378,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   return (
     <div className="voice-room">
       <header className="voice-room-header">
-        <div><span className="voice-eyebrow">VOICE CHANNEL</span><h1>{channel.name}</h1><ConnectionStatus status={status} error={error} audioBlocked={audioBlocked} onEnableAudio={enableAudio} onReconnect={() => setRetryVersion((value) => value + 1)} onLeave={onLeave} /></div>
+        <div><span className="voice-eyebrow">VOICE CHANNEL</span><h1>{channel.name}</h1><ConnectionStatus status={status} error={error} audioBlocked={audioBlocked} onEnableAudio={enableAudio} onReconnect={() => setRetryVersion((value) => value + 1)} onLeave={() => onLeave?.()} /></div>
         <NetworkStats stats={networkStats} quality={room?.localParticipant.connectionQuality} />
       </header>
       {operationMessage && <div className="voice-operation-message">{operationMessage}</div>}
@@ -396,7 +396,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
-      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={onLeave} />
+      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={() => onLeave?.()} />
     </div>
   );
 }

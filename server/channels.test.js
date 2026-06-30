@@ -9,7 +9,9 @@ import {
   getLiveKitParticipantCount,
   listChannelRows,
   migrateChannels,
+  reorderChannels,
   toPublicChannel,
+  validateChannelReorder,
 } from "./channels.js";
 
 function createDb() {
@@ -226,4 +228,39 @@ test("patch persistence preserves false, null, integer maxMembers and accessLeve
   assert.equal(publicChannel.maxMembers, 12);
   assert.equal(publicChannel.accessLevel, "members");
   db.close();
+});
+
+test("reorderChannels rewrites duplicate old sort orders to continuous unique values", () => {
+  const db = createDb();
+  migrateChannels(db);
+  db.prepare("UPDATE channels SET sort_order = 0").run();
+  const result = reorderChannels(db, ["apex", "lobby", "cs2", "delta-force", "private-room"]);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.channels.map((channel) => [channel.id, channel.sortOrder]), [
+    ["apex", 0],
+    ["lobby", 1],
+    ["cs2", 2],
+    ["delta-force", 3],
+    ["private-room", 4],
+  ]);
+  assert.deepEqual(listChannelRows(db).map((row) => row.id), ["apex", "lobby", "cs2", "delta-force", "private-room"]);
+  db.close();
+});
+
+test("reorderChannels rejects duplicate, missing, and unknown IDs", () => {
+  const db = createDb();
+  migrateChannels(db);
+  assert.equal(reorderChannels(db, ["lobby", "lobby"]).error, "频道排序包含重复频道");
+  assert.equal(reorderChannels(db, ["lobby", "cs2"]).error, "频道排序必须包含所有当前频道");
+  assert.equal(reorderChannels(db, ["lobby", "cs2", "delta-force", "apex", "missing"]).error, "频道排序必须与当前频道完全匹配");
+  db.close();
+});
+
+
+test("validateChannelReorder validates full ID set without database", () => {
+  const currentIds = ["lobby", "apex", "cs2"];
+  assert.deepEqual(validateChannelReorder(currentIds, ["apex", "lobby", "cs2"]), { channelIds: ["apex", "lobby", "cs2"] });
+  assert.equal(validateChannelReorder(currentIds, ["lobby", "lobby", "cs2"]).error, "频道排序包含重复频道");
+  assert.equal(validateChannelReorder(currentIds, ["lobby", "apex"]).error, "频道排序必须包含所有当前频道");
+  assert.equal(validateChannelReorder(currentIds, ["lobby", "apex", "missing"]).error, "频道排序必须与当前频道完全匹配");
 });

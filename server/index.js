@@ -38,6 +38,7 @@ import {
   getChannelParticipantCount,
   listChannelRows,
   normalizeChannelName,
+  reorderChannels,
   toPublicChannel,
 } from "./channels.js";
 
@@ -710,6 +711,21 @@ app.post("/api/channels", requireRegistered, (req, res) => {
   } catch (error) {
     console.error("Create channel error:", error);
     res.status(500).json({ error: "创建频道失败" });
+  }
+});
+
+
+app.patch("/api/channels/reorder", requireAdmin, (req, res) => {
+  try {
+    const beforeRows = listChannelRows(db);
+    console.info("[channel-reorder] before", beforeRows.map((channel) => ({ id: channel.id, sortOrder: channel.sort_order })));
+    const result = reorderChannels(db, req.body?.channelIds);
+    if (result.error) return res.status(400).json({ error: result.error });
+    console.info("[channel-reorder] after", result.channels.map((channel) => ({ id: channel.id, sortOrder: channel.sortOrder })));
+    res.json({ success: true, channels: result.channels });
+  } catch (error) {
+    console.error("Reorder channels error:", { name: error?.name, message: error?.message, code: error?.code });
+    res.status(500).json({ error: "调整频道排序失败" });
   }
 });
 
