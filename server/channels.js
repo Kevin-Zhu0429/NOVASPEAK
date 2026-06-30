@@ -113,16 +113,42 @@ export function canEnterChannel(channel, user) {
   return false;
 }
 
-export async function getLiveKitParticipantCount(roomService, roomName) {
-  const participants = await roomService.listParticipants(roomName);
-  return Array.isArray(participants) ? participants.length : 0;
+function getLiveKitErrorCode(error) {
+  return error?.code ?? error?.status ?? error?.statusCode ?? error?.response?.status;
 }
+
+export function isLiveKitRoomNotFoundError(error) {
+  const code = getLiveKitErrorCode(error);
+  if (code === 404 || code === "404" || code === "NOT_FOUND" || code === "not_found") return true;
+  const message = typeof error?.message === "string" ? error.message.toLocaleLowerCase() : "";
+  return /\b(room\s+)?not[ -]?found\b/.test(message) || /\bno such room\b/.test(message);
+}
+
+export function createChannelOccupancyError(error) {
+  const wrapped = new Error("无法确认频道占用状态");
+  wrapped.name = "ChannelOccupancyError";
+  wrapped.cause = error;
+  wrapped.code = getLiveKitErrorCode(error) || error?.code || "UNKNOWN";
+  return wrapped;
+}
+
+export async function getChannelParticipantCount(roomService, roomName) {
+  try {
+    const participants = await roomService.listParticipants(roomName);
+    return Array.isArray(participants) ? participants.length : 0;
+  } catch (error) {
+    if (isLiveKitRoomNotFoundError(error)) return 0;
+    throw createChannelOccupancyError(error);
+  }
+}
+
+export const getLiveKitParticipantCount = getChannelParticipantCount;
 
 export async function assertChannelCapacity({ roomService, channel }) {
   if (channel.max_members === null) {
     return { allowed: true, count: null };
   }
-  const count = await getLiveKitParticipantCount(roomService, channel.id);
+  const count = await getChannelParticipantCount(roomService, channel.id);
   if (count >= channel.max_members) {
     return { allowed: false, status: 409, error: "频道人数已满", count };
   }

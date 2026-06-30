@@ -10,16 +10,17 @@ import {
   canMoveChannelUp,
   extractApiError,
   getAccessLevelLabel,
+  sortChannels,
 } from "../../utils/channel-settings";
 
-export default function ChannelManagementPanel({ channels, apiBase = "", onClose, onRefreshChannels }) {
+export default function ChannelManagementPanel({ channels, apiBase = "", onClose, onRefreshChannels, onInvalidateChannels }) {
   const [editingId, setEditingId] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const sortedChannels = useMemo(() => [...channels].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)), [channels]);
+  const sortedChannels = useMemo(() => sortChannels(channels), [channels]);
   const editingChannel = sortedChannels.find((channel) => channel.id === editingId) || null;
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
 
   async function saveChannel(payload) {
     if (!editingChannel) return;
+    onInvalidateChannels?.();
     setBusy(true);
     setMessage("正在保存…");
     setError("");
@@ -64,6 +66,7 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
   async function moveChannel(index, direction) {
     const result = direction === "up" ? calculateMoveUpSortPatches(sortedChannels, index) : calculateMoveDownSortPatches(sortedChannels, index);
     if (result.error) return;
+    onInvalidateChannels?.();
     setBusy(true);
     setMessage("正在调整排序…");
     setError("");
@@ -84,6 +87,7 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
 
   async function deleteChannel() {
     if (!pendingDelete) return;
+    onInvalidateChannels?.();
     setBusy(true);
     setMessage("");
     setError("");
@@ -93,7 +97,6 @@ export default function ChannelManagementPanel({ channels, apiBase = "", onClose
         let apiError = await extractApiError(response, "删除频道失败");
         if (response.status === 409 && apiError.includes("仍有成员")) apiError = "频道内仍有成员，无法删除";
         if (apiError.includes("系统默认频道")) apiError = "系统默认频道不能删除";
-        if (response.status === 503) apiError = "暂时无法确认频道状态，请稍后重试";
         throw new Error(apiError);
       }
       const contentType = response.headers.get("content-type") || "";

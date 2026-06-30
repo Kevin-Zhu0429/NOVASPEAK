@@ -5,6 +5,7 @@ import {
   assertChannelCapacity,
   buildChannelPatch,
   canEnterChannel,
+  getChannelParticipantCount,
   getLiveKitParticipantCount,
   listChannelRows,
   migrateChannels,
@@ -142,9 +143,26 @@ test("lobby cannot be deleted and seeded ordinary channels can be deleted when i
   db.close();
 });
 
+test("Room not found variants are treated as an inactive empty channel", async () => {
+  const variants = [
+    Object.assign(new Error("room not found"), { code: "NOT_FOUND" }),
+    Object.assign(new Error("missing"), { status: 404 }),
+    Object.assign(new Error("missing"), { statusCode: 404 }),
+  ];
+  for (const error of variants) {
+    const roomService = { listParticipants: async () => { throw error; } };
+    assert.equal(await getChannelParticipantCount(roomService, "custom-room"), 0);
+  }
+});
+
 test("occupied channels are detected before deletion", async () => {
   const roomService = { listParticipants: async () => [{ identity: "u1" }] };
   assert.equal(await getLiveKitParticipantCount(roomService, "custom-room"), 1);
+});
+
+test("real LiveKit failures remain service failures", async () => {
+  const roomService = { listParticipants: async () => { throw Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" }); } };
+  await assert.rejects(() => getChannelParticipantCount(roomService, "custom-room"), /无法确认频道占用状态/);
 });
 
 test("entry permissions follow accessLevel and allowGuests matrix and ignore forged client role", () => {
@@ -175,4 +193,37 @@ test("capacity check rejects full rooms and allows rooms below max", async () =>
 test("public channel exposes safe compatibility fields", () => {
   const channel = toPublicChannel({ id: "r", name: "R", description: "", sort_order: 1, max_members: null, access_level: "everyone", allow_guests: 1, is_system: 0, owner_id: null, is_default: 0, created_at: 1 });
   assert.deepEqual(Object.keys(channel), ["id", "name", "description", "sortOrder", "maxMembers", "accessLevel", "allowGuests", "isSystem", "ownerId", "isDefault", "createdAt"]);
+});
+
+
+test("GET channel data is pure SQLite configuration and does not call LiveKit", () => {
+  const db = createDb();
+  migrateChannels(db);
+  const channels = listChannelRows(db).map(toPublicChannel);
+  assert.equal(channels.length, 5);
+  assert.equal(Object.hasOwn(channels[0], "participantCount"), false);
+  db.close();
+});
+
+test("patch persistence preserves false, null, integer maxMembers and accessLevel", () => {
+  const db = createDb();
+  migrateChannels(db);
+  insertCustom(db);
+  const patch = buildChannelPatch({ allowGuests: false, maxMembers: null, accessLevel: "admins" });
+  db.prepare(`UPDATE channels SET max_members = @maxMembers, access_level = @accessLevel, allow_guests = @allowGuests WHERE id = @id`).run({
+    id: "custom-room",
+    maxMembers: patch.maxMembers,
+    accessLevel: patch.accessLevel,
+    allowGuests: patch.allowGuests ? 1 : 0,
+  });
+  let publicChannel = toPublicChannel(db.prepare("SELECT id, name, description, sort_order, max_members, access_level, allow_guests, is_system, owner_id, is_default, created_at FROM channels WHERE id = ?").get("custom-room"));
+  assert.equal(publicChannel.allowGuests, false);
+  assert.equal(publicChannel.maxMembers, null);
+  assert.equal(publicChannel.accessLevel, "admins");
+  const integerPatch = buildChannelPatch({ maxMembers: 12, accessLevel: "members" });
+  db.prepare("UPDATE channels SET max_members = ?, access_level = ? WHERE id = ?").run(integerPatch.maxMembers, integerPatch.accessLevel, "custom-room");
+  publicChannel = toPublicChannel(db.prepare("SELECT id, name, description, sort_order, max_members, access_level, allow_guests, is_system, owner_id, is_default, created_at FROM channels WHERE id = ?").get("custom-room"));
+  assert.equal(publicChannel.maxMembers, 12);
+  assert.equal(publicChannel.accessLevel, "members");
+  db.close();
 });

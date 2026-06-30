@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyChannelFetchResult,
   buildChannelPatchPayload,
   calculateMoveDownSortPatches,
   calculateMoveUpSortPatches,
@@ -12,6 +13,7 @@ import {
   getAccessLevelLabel,
   getChannelFormInitialValues,
   parseMaxMembers,
+  sortChannels,
 } from "./channel-settings.js";
 
 const channels = [
@@ -82,4 +84,45 @@ test("invalid max members validation fails", () => {
 test("extracts Chinese API error", async () => {
   const response = new Response(JSON.stringify({ error: "频道内仍有成员，无法删除" }), { headers: { "content-type": "application/json" } });
   assert.equal(await extractApiError(response, "失败"), "频道内仍有成员，无法删除");
+});
+
+
+test("sortChannels uses one stable order without mutating input", () => {
+  const input = [
+    { id: "lobby", name: "大厅", sortOrder: 50 },
+    { id: "b", name: "B", sortOrder: 10 },
+    { id: "a", name: "A", sortOrder: 10 },
+  ];
+  const before = input.map((channel) => channel.id);
+  const sortedForList = sortChannels(input).map((channel) => channel.id);
+  const sortedForPanel = sortChannels(input).map((channel) => channel.id);
+  assert.deepEqual(sortedForList, sortedForPanel);
+  assert.deepEqual(sortedForList, ["a", "b", "lobby"]);
+  assert.deepEqual(input.map((channel) => channel.id), before);
+});
+
+test("sortChannels falls back by name and id for equal or missing sortOrder", () => {
+  assert.deepEqual(sortChannels([
+    { id: "c", name: "同名" },
+    { id: "b", name: "同名" },
+    { id: "a", name: "Alpha" },
+  ]).map((channel) => channel.id), ["a", "b", "c"]);
+});
+
+test("stale channel GET results do not replace newer data", () => {
+  const state = { latestRequestId: 2, channels: [{ id: "new", name: "新", sortOrder: 1 }], lastError: "" };
+  const next = applyChannelFetchResult(state, { ok: true, requestId: 1, channels: [{ id: "old", name: "旧", sortOrder: 1 }] });
+  assert.equal(next.channels[0].id, "new");
+});
+
+test("failed channel GET keeps previous successful data", () => {
+  const state = { latestRequestId: 2, channels: [{ id: "keep", name: "保留", sortOrder: 1 }], lastError: "" };
+  const next = applyChannelFetchResult(state, { ok: false, requestId: 2, channels: [] });
+  assert.equal(next.channels[0].id, "keep");
+});
+
+test("PATCH payload keeps false and null values", () => {
+  const result = buildChannelPatchPayload({ name: "A", description: "", maxMembersMode: "unlimited", maxMembers: "", accessLevel: "everyone", allowGuests: false });
+  assert.equal(result.payload.allowGuests, false);
+  assert.equal(result.payload.maxMembers, null);
 });

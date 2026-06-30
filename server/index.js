@@ -35,7 +35,7 @@ import {
   buildChannelPatch,
   canEnterChannel,
   getChannelById,
-  getLiveKitParticipantCount,
+  getChannelParticipantCount,
   listChannelRows,
   normalizeChannelName,
   toPublicChannel,
@@ -95,23 +95,6 @@ function getVoiceParticipantIdentity(user, voiceConnectionId) {
   return connectionId ? `${user.id}:voice:${connectionId}` : user.id;
 }
 
-async function getChannelStatus(channel) {
-  try {
-    const participants = await roomService.listParticipants(channel.id);
-
-    return {
-      ...channel,
-      participantCount: participants.length,
-      participants: participants.map((p) => p.identity),
-    };
-  } catch (error) {
-    return {
-      ...channel,
-      participantCount: 0,
-      participants: [],
-    };
-  }
-}
 
 function normalizeNickname(value) {
   return value
@@ -687,15 +670,19 @@ app.put("/api/account/me/positions",
   }
 );
 
-app.get("/api/channels", requireAuthenticated, async (req, res) => {
+app.get("/api/channels", requireAuthenticated, (req, res) => {
+  console.info("[channel-list] request-start");
   try {
     const channels = listChannelRows(db).map(toPublicChannel);
-    const result = await Promise.all(
-      channels.map((channel) => getChannelStatus(channel))
-    );
-    res.json(result);
+    console.info("[channel-list] db-query-success");
+    console.info("[channel-list] response-success");
+    res.json(channels);
   } catch (error) {
-    console.error("Get channels error:", error);
+    console.error("[channel-list] failed", {
+      name: error?.name,
+      message: error?.message,
+      code: error?.code,
+    });
     res.status(500).json({ error: "获取频道列表失败" });
   }
 });
@@ -770,14 +757,14 @@ app.delete("/api/channels/:channelId", requireAdmin, async (req, res) => {
     if (channel.is_system) return res.status(409).json({ error: "系统默认频道不能删除" });
     let participantCount;
     try {
-      participantCount = await getLiveKitParticipantCount(roomService, channel.id);
+      participantCount = await getChannelParticipantCount(roomService, channel.id);
     } catch (error) {
-      console.error("Check channel occupancy error:", error);
+      console.error("Check channel occupancy error:", { name: error?.name, message: error?.message, code: error?.code });
       return res.status(503).json({ error: "暂时无法确认频道占用状态，请稍后再试" });
     }
     if (participantCount > 0) return res.status(409).json({ error: "频道内仍有成员，无法删除" });
     db.prepare("DELETE FROM channels WHERE id = ?").run(channel.id);
-    res.json({ success: true, deletedChannelId: channel.id });
+    res.json({ ok: true, deletedChannelId: channel.id });
   } catch (error) {
     console.error("Delete channel error:", error);
     res.status(500).json({ error: "删除频道失败" });
