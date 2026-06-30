@@ -60,6 +60,30 @@ export function buildChannelPatchPayload(values) {
   };
 }
 
+
+export function getChannelSortOrder(channel, fallback = 0) {
+  return Number.isInteger(channel?.sortOrder) ? channel.sortOrder : fallback;
+}
+
+export function sortChannels(channels) {
+  if (!Array.isArray(channels)) return [];
+  return [...channels].sort((a, b) => (
+    getChannelSortOrder(a, Number.MAX_SAFE_INTEGER) - getChannelSortOrder(b, Number.MAX_SAFE_INTEGER)
+    || String(a?.name || "").localeCompare(String(b?.name || ""))
+    || String(a?.id || "").localeCompare(String(b?.id || ""))
+  ));
+}
+
+export function applyChannelFetchResult(state, result) {
+  if (!result?.ok || !Array.isArray(result.channels)) return state;
+  if (Number.isInteger(result.requestId) && result.requestId !== state.latestRequestId) return state;
+  return {
+    ...state,
+    channels: sortChannels(result.channels),
+    lastError: "",
+  };
+}
+
 export function canMoveChannelUp(channels, index) {
   return Array.isArray(channels) && index > 0 && index < channels.length;
 }
@@ -69,7 +93,7 @@ export function canMoveChannelDown(channels, index) {
 }
 
 function getSortOrder(channel, fallback) {
-  return Number.isInteger(channel?.sortOrder) ? channel.sortOrder : fallback;
+  return getChannelSortOrder(channel, fallback);
 }
 
 export function calculateMoveUpSortPatches(channels, index) {

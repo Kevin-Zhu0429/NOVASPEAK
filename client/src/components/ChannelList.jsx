@@ -1,3 +1,4 @@
+import { sortChannels } from "../utils/channel-settings";
 export default function ChannelList({
   channels,
   currentChannel,
@@ -36,7 +37,7 @@ export default function ChannelList({
       </div>
 
       <div className="channel-list">
-        {channels.map((channel) => {
+        {sortChannels(channels).map((channel) => {
           const active = currentChannel?.id === channel.id;
           const hasUsers = channel.participantCount > 0;
 

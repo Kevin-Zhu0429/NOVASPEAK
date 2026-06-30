@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelList from "./components/ChannelList";
 import LoginScreen from "./components/auth/LoginScreen";
 import AccountSettings from "./components/account/AccountSettings";
@@ -10,6 +10,7 @@ import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
 import usePresence from "./hooks/usePresence";
 import { getPositionText } from "./utils/user-display";
+import { sortChannels } from "./utils/channel-settings";
 import "./App.css";
 
 
@@ -32,6 +33,8 @@ export default function App() {
   const [showChannelManagement, setShowChannelManagement] = useState(false);
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState("");
+  const channelRequestIdRef = useRef(0);
+  const lastChannelFetchErrorRef = useRef("");
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
   const presence = usePresence(currentUser, API_BASE);
@@ -83,7 +86,12 @@ export default function App() {
   };
 }, []);
 
+  const invalidateChannelRequests = useCallback(function invalidateChannelRequests() {
+    channelRequestIdRef.current += 1;
+  }, []);
+
   const fetchChannels = useCallback(async function fetchChannels() {
+    const requestId = ++channelRequestIdRef.current;
     try {
       const response = await fetch(
         `${API_BASE}/api/channels`,
@@ -102,13 +110,24 @@ export default function App() {
         throw new Error(data.error || "获取频道列表失败");
       }
 
-      setChannels(data);
+      if (requestId !== channelRequestIdRef.current) return data;
+
+      const sortedData = sortChannels(data);
+      lastChannelFetchErrorRef.current = "";
+      setChannels(sortedData);
       setCurrentChannel((current) => {
         if (!current) return current;
-        return data.find((channel) => channel.id === current.id) || current;
+        return sortedData.find((channel) => channel.id === current.id) || current;
       });
+      return sortedData;
     } catch (error) {
-      console.error("获取频道列表失败：", error);
+      if (requestId !== channelRequestIdRef.current) return null;
+      const message = error?.message || "获取频道列表失败";
+      if (lastChannelFetchErrorRef.current !== message) {
+        console.error("获取频道列表失败：", error);
+        lastChannelFetchErrorRef.current = message;
+      }
+      return null;
     }
   }, []);
 
@@ -366,6 +385,7 @@ if (!currentUser) {
             channels={channels}
             apiBase={API_BASE}
             onRefreshChannels={fetchChannels}
+            onInvalidateChannels={invalidateChannelRequests}
             onClose={() => setShowChannelManagement(false)}
           />
         )}
