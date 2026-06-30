@@ -2063,3 +2063,287 @@ input {
 .voice-channel-submenu { margin: 0 0 2px 8px; padding-left: 6px; border-left: 1px solid rgba(94, 234, 212, .2); }
 .voice-channel-submenu span { display: block; padding: 7px 10px; color: #94a3b8; font-size: 12px; }
 .server-muted-badge { position: absolute; left: 10px; bottom: 6px; padding: 2px 7px; border-radius: 999px; color: #fecaca; background: rgba(127, 29, 29, .55); font-size: 10px; }
+
+.channel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-management-entry {
+  padding: 7px 10px;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 9px;
+  background: rgba(15, 118, 110, 0.16);
+  color: #99f6e4;
+  font-size: 12px;
+}
+
+.channel-management-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(2, 6, 23, 0.76);
+}
+
+.channel-management-panel {
+  width: min(760px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px;
+  border-left: 1px solid rgba(94, 234, 212, 0.22);
+  background: linear-gradient(160deg, #031219, #071f25);
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.45);
+}
+
+.channel-management-panel > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.channel-management-panel > header span,
+.channel-management-panel > header p {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.channel-management-panel > header h2 {
+  margin: 6px 0;
+}
+
+.channel-management-panel > header button {
+  align-self: flex-start;
+  padding: 4px 10px;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 26px;
+}
+
+.channel-panel-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.channel-panel-message.success {
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  background: rgba(20, 184, 166, 0.12);
+  color: #99f6e4;
+}
+
+.channel-panel-message.error {
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+}
+
+.channel-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.channel-settings-card {
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 16px;
+  background: rgba(2, 12, 18, 0.62);
+}
+
+.channel-settings-main,
+.channel-settings-actions,
+.channel-settings-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-settings-main {
+  justify-content: space-between;
+}
+
+.channel-settings-main h3 {
+  margin: 0 0 5px;
+}
+
+.channel-settings-main p,
+.channel-settings-main small,
+.channel-form-hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.channel-type,
+.channel-settings-meta span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.13);
+  color: #bfdbfe;
+  font-size: 11px;
+}
+
+.channel-type.system {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fde68a;
+}
+
+.channel-settings-meta {
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.channel-settings-actions {
+  flex-wrap: wrap;
+}
+
+.channel-settings-actions button,
+.channel-form-actions button,
+.channel-delete-dialog button {
+  padding: 8px 11px;
+  border-radius: 9px;
+  background: #1f2937;
+  color: #cbd5e1;
+}
+
+.channel-settings-actions button:disabled,
+.channel-form-actions button:disabled,
+.channel-delete-dialog button:disabled,
+.channel-management-panel > header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.primary-action {
+  background: #0f766e !important;
+  color: white !important;
+}
+
+.danger-button {
+  background: rgba(127, 29, 29, 0.72) !important;
+  color: #fecaca !important;
+}
+
+.channel-system-note {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.channel-edit-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.channel-form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.channel-form-grid label,
+.channel-radio-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.channel-form-grid input,
+.channel-form-grid textarea,
+.channel-form-grid select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  outline: none;
+  background: #0f172a;
+  color: white;
+  font-family: inherit;
+}
+
+.channel-form-grid textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.channel-form-grid small {
+  color: #64748b;
+  text-align: right;
+}
+
+.channel-radio-row label,
+.channel-switch-row {
+  flex-direction: row;
+  align-items: center;
+  width: fit-content;
+}
+
+.channel-radio-row input[type="radio"],
+.channel-switch-row input[type="checkbox"] {
+  width: auto;
+}
+
+.channel-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.channel-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.channel-delete-dialog {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  border-radius: 18px;
+  background: #07151c;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.channel-delete-dialog h3 {
+  margin: 0 0 10px;
+}
+
+.channel-delete-dialog p {
+  margin: 0 0 8px;
+  color: white;
+}
+
+.channel-delete-dialog span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.channel-delete-dialog div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (max-width: 720px) {
+  .channel-management-panel {
+    padding: 18px;
+  }
+
+  .channel-settings-main,
+  .channel-settings-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

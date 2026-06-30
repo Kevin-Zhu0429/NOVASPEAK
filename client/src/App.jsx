@@ -4,6 +4,7 @@ import LoginScreen from "./components/auth/LoginScreen";
 import AccountSettings from "./components/account/AccountSettings";
 import TeamManagement from "./components/team/TeamManagement";
 import TeamMembers from "./components/team/TeamMembers";
+import ChannelManagementPanel from "./components/channels/ChannelManagementPanel";
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
@@ -28,6 +29,7 @@ export default function App() {
   const [showTeamManagement,setShowTeamManagement,] = useState(false);
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [showTeamMembers, setShowTeamMembers] = useState(false);
+  const [showChannelManagement, setShowChannelManagement] = useState(false);
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState("");
 
@@ -89,6 +91,11 @@ export default function App() {
           credentials: "include",
         }
       );
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error("获取频道列表失败");
+      }
+
       const data = await response.json();
 
       if (!response.ok) {
@@ -96,6 +103,10 @@ export default function App() {
       }
 
       setChannels(data);
+      setCurrentChannel((current) => {
+        if (!current) return current;
+        return data.find((channel) => channel.id === current.id) || current;
+      });
     } catch (error) {
       console.error("获取频道列表失败：", error);
     }
@@ -249,6 +260,11 @@ if (!currentUser) {
                   ? createChannel
                   : null
               }
+              onOpenChannelManagement={
+                currentUser.role === "admin"
+                  ? () => setShowChannelManagement(true)
+                  : null
+              }
             />
           </div>
 
@@ -343,6 +359,16 @@ if (!currentUser) {
           user={welcomeUser}
         />
       )}
+
+      {showChannelManagement &&
+        currentUser.role === "admin" && (
+          <ChannelManagementPanel
+            channels={channels}
+            apiBase={API_BASE}
+            onRefreshChannels={fetchChannels}
+            onClose={() => setShowChannelManagement(false)}
+          />
+        )}
 
       {showTeamManagement &&
         currentUser.role === "admin" && (
