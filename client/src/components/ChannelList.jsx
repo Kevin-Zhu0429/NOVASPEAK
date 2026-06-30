@@ -3,6 +3,7 @@ export default function ChannelList({
   currentChannel,
   onJoinChannel,
   onCreateChannel,
+  onOpenChannelManagement,
 }) {
   async function handleCreateChannel() {
     const name = prompt("请输入新频道名称");
@@ -19,11 +20,19 @@ export default function ChannelList({
       <div className="channel-section-header">
         <div className="section-title">语音频道</div>
 
-        {typeof onCreateChannel === "function" && (
-          <button className="create-channel-btn" onClick={handleCreateChannel}>
-            +
-          </button>
-        )}
+        <div className="channel-header-actions">
+          {typeof onOpenChannelManagement === "function" && (
+            <button type="button" className="channel-management-entry" onClick={onOpenChannelManagement}>
+              频道管理
+            </button>
+          )}
+
+          {typeof onCreateChannel === "function" && (
+            <button type="button" className="create-channel-btn" onClick={handleCreateChannel}>
+              +
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="channel-list">
