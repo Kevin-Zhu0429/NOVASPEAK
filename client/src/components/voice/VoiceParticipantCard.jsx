@@ -2,11 +2,19 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Mic, MicOff, MoreHorizontal, Signal } from "lucide-react";
 import { formatLoss, qualityLabel } from "../../utils/voice-network";
-import { getParticipantMenuActions } from "../../utils/voice-member-menu";
+import { getMemberStatusBadges, getParticipantMenuActions } from "../../utils/voice-member-menu";
+import { getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
+import VoiceMemberContextMenu from "./VoiceMemberContextMenu";
+import MemberProfileDialog from "./MemberProfileDialog";
 
-function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant }) {
+function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
   const [open, setOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const memberKey = getMemberAudioKey(item);
+  const localPref = getMemberAudioPref(localAudioPrefs, memberKey);
+  const statusBadges = getMemberStatusBadges({ serverMuted: item.serverMuted, localMuted: !item.isLocal && localPref.muted });
   const menuRef = useRef(null);
   const buttonRef = useRef(null);
   const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0 });
@@ -75,8 +83,17 @@ function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, 
     </div>
   ) : null;
 
+  const openContextMenu = (event) => {
+    event.preventDefault();
+    // Portal 内的右键事件会沿 React 树冒泡回卡片，不重新打开菜单
+    if (event.target instanceof Element && event.target.closest(".voice-member-menu, .member-profile-overlay")) return;
+    setOpen(false);
+    setMoveOpen(false);
+    setContextMenu({ x: event.clientX, y: event.clientY });
+  };
+
   return (
-    <article className={`voice-participant-card ${item.isSpeaking ? "speaking" : ""} ${busy ? "operating" : ""}`}>
+    <article className={`voice-participant-card ${item.isSpeaking ? "speaking" : ""} ${busy ? "operating" : ""}`} onContextMenu={openContextMenu}>
       <div className="voice-avatar">{item.displayName.slice(0, 1).toUpperCase()}</div>
       <div className="voice-participant-copy">
         <strong>{item.displayName}{item.isLocal ? "（我）" : ""}</strong>
@@ -96,8 +113,38 @@ function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, 
           {menu && createPortal(menu, document.body)}
         </div>
       )}
-      {item.serverMuted && <div className="server-muted-badge">服务器静音</div>}
+      {statusBadges.length > 0 && (
+        <div className="voice-card-badges">
+          {statusBadges.map((badge) => <div key={badge.type} className={`${badge.type}-badge`}>{badge.label}</div>)}
+        </div>
+      )}
       {item.isSpeaking && <div className="voice-level" style={{ "--voice-level": Math.max(0.12, item.audioLevel) }} />}
+      {contextMenu && (
+        <VoiceMemberContextMenu
+          position={contextMenu}
+          item={item}
+          currentUser={currentUser}
+          currentChannel={currentChannel}
+          channels={channels}
+          localPref={localPref}
+          busy={busy}
+          anyBusy={anyBusy}
+          onClose={() => setContextMenu(null)}
+          onShowProfile={() => setProfileOpen(true)}
+          onSetVolume={(volume) => onSetMemberVolume?.(memberKey, volume)}
+          onSetLocalMuted={(muted) => onSetMemberLocalMuted?.(memberKey, muted)}
+          onManageParticipant={onManageParticipant}
+        />
+      )}
+      {profileOpen && (
+        <MemberProfileDialog
+          item={item}
+          memberKey={memberKey}
+          channelName={currentChannel?.name}
+          localPref={localPref}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
     </article>
   );
 }

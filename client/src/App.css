@@ -2062,7 +2062,25 @@ input {
 .voice-member-menu button:disabled, .voice-channel-submenu button:disabled { opacity: .52; cursor: not-allowed; }
 .voice-channel-submenu { margin: 0 0 2px 8px; padding-left: 6px; border-left: 1px solid rgba(94, 234, 212, .2); }
 .voice-channel-submenu span { display: block; padding: 7px 10px; color: #94a3b8; font-size: 12px; }
-.server-muted-badge { position: absolute; left: 10px; bottom: 6px; padding: 2px 7px; border-radius: 999px; color: #fecaca; background: rgba(127, 29, 29, .55); font-size: 10px; }
+.voice-card-badges { position: absolute; left: 10px; bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.server-muted-badge { padding: 2px 7px; border-radius: 999px; color: #fecaca; background: rgba(127, 29, 29, .55); font-size: 10px; }
+.local-muted-badge { padding: 2px 7px; border-radius: 999px; color: #cbd5e1; border: 1px solid rgba(148, 163, 184, .35); background: rgba(51, 65, 85, .6); font-size: 10px; }
+.voice-member-context-menu { width: 240px; }
+.voice-menu-divider { height: 1px; margin: 2px 4px; background: rgba(148, 163, 184, .18); }
+.voice-volume-control { display: grid; gap: 6px; padding: 8px 10px; }
+.voice-volume-control span { color: #dbeafe; font-size: 13px; }
+.voice-volume-control input[type="range"] { width: 100%; accent-color: #2dd4bf; }
+.voice-volume-control small { color: #94a3b8; font-size: 11px; line-height: 1.4; }
+.member-profile-overlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(2, 6, 23, .76); }
+.member-profile-dialog { width: min(420px, 100%); max-height: min(560px, 90vh); overflow-y: auto; padding: 20px; border: 1px solid rgba(94, 234, 212, .22); border-radius: 14px; background: linear-gradient(160deg, #031219, #071f25); box-shadow: 0 24px 70px rgba(0, 0, 0, .45); }
+.member-profile-dialog header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.member-profile-dialog header h3 { margin: 6px 0 0; color: #ecfeff; }
+.member-profile-dialog header button { padding: 4px 12px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 999px; color: #cbd5e1; background: transparent; }
+.member-profile-dialog header button:hover { border-color: rgba(45, 212, 191, .58); color: #ccfbf1; }
+.member-profile-dialog dl { margin: 0; display: grid; gap: 8px; }
+.member-profile-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 10px; background: rgba(15, 23, 42, .55); }
+.member-profile-row dt { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+.member-profile-row dd { margin: 0; color: #e2e8f0; font-size: 13px; text-align: right; word-break: break-all; }
 
 .channel-header-actions {
   display: flex;
