@@ -69,8 +69,8 @@ export function sortChannels(channels) {
   if (!Array.isArray(channels)) return [];
   return [...channels].sort((a, b) => (
     getChannelSortOrder(a, Number.MAX_SAFE_INTEGER) - getChannelSortOrder(b, Number.MAX_SAFE_INTEGER)
-    || String(a?.name || "").localeCompare(String(b?.name || ""))
-    || String(a?.id || "").localeCompare(String(b?.id || ""))
+    || String(a?.name || "").localeCompare(String(b?.name || ""), "en")
+    || String(a?.id || "").localeCompare(String(b?.id || ""), "en")
   ));
 }
 
