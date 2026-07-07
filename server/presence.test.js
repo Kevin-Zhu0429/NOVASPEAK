@@ -151,3 +151,134 @@ test("guest has a separate authenticated principal and safe public profile", () 
   assert.equal(JSON.stringify(member).includes("private-uuid"), false);
   service.close();
 });
+
+// ---------- 3B：指定事件语音播报（announcement） ----------
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const announcementsOf = (connection) => connection.messages.filter((message) => message.type === "announcement");
+const observerUser = { id: "observer-id", displayName: "OBSERVER", role: "member", isGuest: false, positions: [], positionNames: [] };
+const ANNOUNCE_GRACE_MS = 25;
+
+function createAnnouncementFixture() {
+  const service = createPresenceService({
+    heartbeatMs: 60_000,
+    autoHeartbeat: false,
+    startupQuietMs: 0,
+    announcementGraceMs: ANNOUNCE_GRACE_MS,
+    channelLookup: (id) => ({ cs2: { id: "cs2", name: "CS2" }, apex: { id: "apex", name: "Apex" } })[id] || null,
+  });
+  const observer = new FakeConnection();
+  service.addConnection(observer, {}, observerUser);
+  return { service, observer };
+}
+
+test("从 0 个连接变为 1 个连接时产生 server_joined，且初始快照不产生 announcement", () => {
+  const { service, observer } = createAnnouncementFixture();
+  const joining = new FakeConnection();
+  service.addConnection(joining, {}, formalUser);
+  const seen = announcementsOf(observer);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].eventType, "server_joined");
+  assert.equal(seen[0].actor.displayName, "CHILLILY");
+  assert.deepEqual(seen[0].actor.positionNames, ["队长", "狙击手"]);
+  // 新连接本身没有收到任何 announcement：既不重播已有成员，也不播自己的登录
+  assert.equal(announcementsOf(joining).length, 0);
+  // 快照仍然正常发送且类型不同
+  assert.equal(joining.messages.some((message) => message.type === "presence:snapshot"), true);
+  service.close();
+});
+
+test("同账号第二个标签页连接不重复产生 server_joined", () => {
+  const { service, observer } = createAnnouncementFixture();
+  service.addConnection(new FakeConnection(), {}, formalUser);
+  service.addConnection(new FakeConnection(), {}, formalUser);
+  assert.equal(announcementsOf(observer).filter((item) => item.eventType === "server_joined").length, 1);
+  service.close();
+});
+
+test("lobby → channel 产生 channel_joined，channel → lobby 在宽限期后产生 channel_left", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const joined = announcementsOf(observer).filter((item) => item.eventType === "channel_joined");
+  assert.equal(joined.length, 1);
+  assert.equal(joined[0].channelName, "CS2");
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "lobby", channelId: null }));
+  // 降级播报走宽限期，不是立刻播
+  assert.equal(announcementsOf(observer).filter((item) => item.eventType === "channel_left").length, 0);
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  const left = announcementsOf(observer).filter((item) => item.eventType === "channel_left");
+  assert.equal(left.length, 1);
+  assert.equal(left[0].channelName, "CS2");
+  service.close();
+});
+
+test("reconnecting 不产生 channel_left / channel_joined", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "reconnecting", channelId: "cs2" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("断线后在宽限期内重连不产生欢迎和离开/进入播报", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const first = new FakeConnection();
+  service.addConnection(first, {}, formalUser);
+  first.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  first.emit("close");
+  const second = new FakeConnection();
+  service.addConnection(second, {}, formalUser);
+  second.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("最后一个连接断开且未重连时，宽限期后产生 channel_left", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).filter((item) => item.eventType === "channel_left").length;
+  connection.emit("close");
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  const left = announcementsOf(observer).filter((item) => item.eventType === "channel_left");
+  assert.equal(left.length, baseline + 1);
+  assert.equal(left.at(-1).channelName, "CS2");
+  service.close();
+});
+
+test("noteParticipantMoved 后的频道变化不额外产生进入/离开（含 :voice: 后缀归一化）", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  assert.equal(service.noteParticipantMoved("database-id:voice:conn-123", "apex"), true);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("eventId 存在且稳定唯一，payload 不包含敏感字段", () => {
+  const { service, observer } = createAnnouncementFixture();
+  const first = service.broadcastAnnouncement({ eventType: "channel_moved", actor: { displayName: "CHILLILY" }, channelId: "cs2", channelName: "CS2" });
+  const second = service.broadcastAnnouncement({ eventType: "server_muted", actor: { displayName: "CHILLILY" }, channelId: "cs2", channelName: "CS2" });
+  assert.equal(typeof first.eventId, "string");
+  assert.ok(first.eventId.length > 0);
+  assert.notEqual(first.eventId, second.eventId);
+  assert.equal(service.broadcastAnnouncement({ eventType: "hacked", actor: { displayName: "X" } }), null);
+  const serialized = JSON.stringify(announcementsOf(observer));
+  assert.doesNotMatch(serialized, /database-id|observer-id|session|token|cookie|password|@/i);
+  service.close();
+});

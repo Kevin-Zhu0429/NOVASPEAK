@@ -2081,6 +2081,7 @@ input {
 .member-profile-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 10px; background: rgba(15, 23, 42, .55); }
 .member-profile-row dt { color: #94a3b8; font-size: 12px; white-space: nowrap; }
 .member-profile-row dd { margin: 0; color: #e2e8f0; font-size: 13px; text-align: right; word-break: break-all; }
+.announcement-toggle[aria-pressed="false"] { opacity: .62; }
 
 .channel-header-actions {
   display: flex;

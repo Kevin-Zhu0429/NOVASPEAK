@@ -15,7 +15,15 @@ const target = {
 
 function makeService({ participants = [target] } = {}) {
   const calls = [];
-  const presence = { events: [], setConnectionLocation(identity, source, next) { this.events.push(["set", identity, source, next]); return true; }, sendCommandToChannelConnection(identity, channel, command) { this.events.push(["cmd", identity, channel, command.command]); return true; } };
+  const presence = {
+    events: [],
+    announcements: [],
+    moves: [],
+    setConnectionLocation(identity, source, next) { this.events.push(["set", identity, source, next]); return true; },
+    sendCommandToChannelConnection(identity, channel, command) { this.events.push(["cmd", identity, channel, command.command]); return true; },
+    noteParticipantMoved(identity, targetChannelId) { this.moves.push([identity, targetChannelId]); return true; },
+    broadcastAnnouncement(event) { this.announcements.push(event); return event; },
+  };
   const service = createVoiceManagementService({
     roomService: {
       async listParticipants(room) { calls.push(["list", room]); return participants; },
@@ -123,4 +131,41 @@ test("repeat mute repairs missing metadata and restored permissions", async () =
   const repaired = await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
   assert.equal(repaired.alreadyMuted, true);
   assert.equal(repaired.serverMuted, true);
+});
+
+// ---------- 3B：移动 / 服务器静音的播报事件 ----------
+
+test("move 成功产生一条 channel_moved 且登记移动目标，不额外产生进入/离开", async () => {
+  const { service, presence } = makeService();
+  await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.deepEqual(presence.moves, [["target-id", "apex"]]);
+  assert.equal(presence.announcements.length, 1);
+  assert.equal(presence.announcements[0].eventType, "channel_moved");
+  assert.equal(presence.announcements[0].channelName, "Apex");
+  assert.equal(presence.announcements[0].channelId, "apex");
+  assert.equal(presence.announcements[0].actor.displayName, "目标成员");
+  assert.equal(presence.announcements.some((item) => ["channel_joined", "channel_left"].includes(item.eventType)), false);
+});
+
+test("服务器静音只在首次成功时产生 server_muted，alreadyMuted 与 unmute 不播报", async () => {
+  const { service, presence } = makeService();
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  assert.equal(presence.announcements.length, 1);
+  assert.equal(presence.announcements[0].eventType, "server_muted");
+  assert.equal(presence.announcements[0].actor.displayName, "目标成员");
+  const again = await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  assert.equal(again.alreadyMuted, true);
+  assert.equal(presence.announcements.length, 1);
+  await service.unmute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  assert.equal(presence.announcements.length, 1);
+  await service.unmute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  assert.equal(presence.announcements.length, 1);
+});
+
+test("播报 payload 只包含展示字段，不含敏感信息", async () => {
+  const { service, presence } = makeService();
+  await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  const serialized = JSON.stringify(presence.announcements);
+  assert.doesNotMatch(serialized, /admin-id|session|token|cookie|password|secret/i);
 });
