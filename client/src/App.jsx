@@ -9,6 +9,7 @@ import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
 import usePresence from "./hooks/usePresence";
+import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
 import { normalizeUserMessage, sortChannels } from "./utils/channel-settings";
 import "./App.css";
@@ -37,7 +38,8 @@ export default function App() {
   const lastChannelFetchErrorRef = useRef("");
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
-  const presence = usePresence(currentUser, API_BASE);
+  const announcements = useVoiceAnnouncements(Boolean(currentUser));
+  const presence = usePresence(currentUser, API_BASE, announcements.handleAnnouncement);
 
   useEffect(() => {
   let cancelled = false;
@@ -314,6 +316,17 @@ if (!currentUser) {
             >
               <span className="management-icon">◉</span>
               战队成员
+            </button>
+
+            <button
+              type="button"
+              className="sidebar-account-action announcement-toggle"
+              onClick={() => announcements.setEnabled(!announcements.enabled)}
+              aria-pressed={announcements.enabled}
+              title="事件语音播报只影响当前浏览器"
+            >
+              <span className="management-icon">{announcements.enabled ? "🔊" : "🔇"}</span>
+              语音播报：{announcements.enabled ? "开" : "关"}
             </button>
 
             {currentUser.role === "admin" && (

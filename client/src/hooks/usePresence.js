@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildPresenceWebSocketUrl, parsePresenceMessage, sortPresenceMembers } from "../utils/presence-display";
 
-export default function usePresence(currentUser, apiBase = "") {
+export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
   const [members, setMembers] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const socketRef = useRef(null);
@@ -9,6 +9,9 @@ export default function usePresence(currentUser, apiBase = "") {
   const attemptRef = useRef(0);
   const activeRef = useRef(false);
   const locationRef = useRef({ state: "lobby", channelId: null });
+  const onAnnouncementRef = useRef(onAnnouncement);
+
+  useEffect(() => { onAnnouncementRef.current = onAnnouncement; }, [onAnnouncement]);
 
   const setLocation = useCallback((location) => {
     locationRef.current = location;
@@ -47,7 +50,11 @@ export default function usePresence(currentUser, apiBase = "") {
       socket.onmessage = (event) => {
         if (socketRef.current !== socket) return;
         const snapshot = parsePresenceMessage(event.data);
-        if (snapshot) setMembers(sortPresenceMembers(snapshot));
+        if (snapshot) {
+          setMembers(sortPresenceMembers(snapshot));
+          return;
+        }
+        onAnnouncementRef.current?.(event.data);
       };
       socket.onclose = (event) => {
         if (socketRef.current !== socket || !activeRef.current) return;

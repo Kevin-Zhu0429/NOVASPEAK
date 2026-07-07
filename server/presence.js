@@ -27,6 +27,16 @@ export function aggregateConnections(connections) {
   return { state: "lobby", channelId: null, channelName: "大厅" };
 }
 
+const LOBBY_LOCATION = Object.freeze({ state: "lobby", channelId: null, channelName: "大厅" });
+
+export const ANNOUNCEMENT_EVENT_TYPES = Object.freeze([
+  "server_joined",
+  "channel_joined",
+  "channel_left",
+  "channel_moved",
+  "server_muted",
+]);
+
 export function createPresenceService(options = {}) {
   const principals = new Map();
   const heartbeatMs = options.heartbeatMs ?? 30_000;
@@ -34,6 +44,14 @@ export function createPresenceService(options = {}) {
   const diagnosticLogger = options.diagnosticLogger;
   const authResolver = options.authResolver ?? resolveAuthenticatedIdentity;
   const channelLookup = options.channelLookup ?? ((id) => db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id));
+  // 语音播报事件：降级（离开频道/离线）延迟 graceMs 播报，刷新或短暂重连在窗口内恢复则静默；
+  // 服务重启后的 startupQuietMs 内不播欢迎，避免全员重连造成欢迎风暴。
+  const announcementGraceMs = options.announcementGraceMs ?? 10_000;
+  const startupQuietMs = options.startupQuietMs ?? 15_000;
+  const announcementIdFactory = options.announcementIdFactory ?? randomUUID;
+  const startedAt = Date.now();
+  const pendingOffline = new Map();
+  const recentMoves = new Map();
   const wss = new WebSocketServer({
     noServer: true,
     clientTracking: false,
@@ -82,13 +100,138 @@ export function createPresenceService(options = {}) {
 
 
   function findChannelConnection(identity, sourceChannelId) {
-    for (const principal of principals.values()) {
+    for (const [key, principal] of principals) {
       for (const [connection, state] of principal.connections) {
         const userId = state.req?.authUserId;
-        if (userId === identity && state.channelId === sourceChannelId) return { connection, state };
+        if (userId === identity && state.channelId === sourceChannelId) return { connection, state, key, principal };
       }
     }
     return null;
+  }
+
+  function announcementActor(profile = {}) {
+    return {
+      displayName: typeof profile.nickname === "string" && profile.nickname.trim() ? profile.nickname.trim() : "未知成员",
+      roleLabel: typeof profile.roleLabel === "string" ? profile.roleLabel : "",
+      isGuest: profile.isGuest === true,
+      positionNames: Array.isArray(profile.positionNames) ? profile.positionNames.filter((name) => typeof name === "string" && name) : [],
+    };
+  }
+
+  // 播报范围：当前实现广播给全部在线连接；如需按频道筛选，可在此按
+  // principal 的 aggregateConnections 位置过滤（预留扩展点）。
+  function broadcastAnnouncement({ eventType, actor, channelId = null, channelName = "" } = {}) {
+    if (!ANNOUNCEMENT_EVENT_TYPES.includes(eventType)) return null;
+    const payload = {
+      type: "announcement",
+      eventId: announcementIdFactory(),
+      eventType,
+      createdAt: Date.now(),
+      actor: announcementActor(actor ? { nickname: actor.displayName, ...actor } : {}),
+      channelId: typeof channelId === "string" ? channelId : null,
+      channelName: typeof channelName === "string" ? channelName : "",
+    };
+    for (const principal of principals.values()) {
+      for (const connection of principal.connections.keys()) sendJson(connection, payload);
+    }
+    return payload;
+  }
+
+  // LiveKit participantIdentity 形如 "<用户ID>:voice:<连接ID>"，归一化为 principal key。
+  function principalKeyForParticipantIdentity(participantIdentity) {
+    const identity = typeof participantIdentity === "string" ? participantIdentity.trim() : "";
+    if (!identity) return "";
+    const marker = identity.indexOf(":voice:");
+    const baseId = marker > 0 ? identity.slice(0, marker) : identity;
+    return baseId.startsWith("guest:") ? baseId : `user:${baseId}`;
+  }
+
+  // 移动成员成功后调用：随后到达目标频道的位置变化不再播进入/离开（由 channel_moved 覆盖）。
+  function noteParticipantMoved(participantIdentity, targetChannelId) {
+    const key = principalKeyForParticipantIdentity(participantIdentity);
+    if (!key || typeof targetChannelId !== "string" || !targetChannelId) return false;
+    recentMoves.set(key, { channelId: targetChannelId, at: Date.now() });
+    return true;
+  }
+
+  function consumeRecentMove(key, channelId) {
+    const entry = recentMoves.get(key);
+    if (!entry) return false;
+    if (Date.now() - entry.at > announcementGraceMs) {
+      recentMoves.delete(key);
+      return false;
+    }
+    if (entry.channelId !== channelId) return false;
+    recentMoves.delete(key);
+    return true;
+  }
+
+  function scheduleDowngrade(key, principal) {
+    if (principal.downgradeTimer) return;
+    principal.downgradeTimer = setTimeout(() => fireDowngrade(key), announcementGraceMs);
+    principal.downgradeTimer.unref?.();
+  }
+
+  function fireDowngrade(key) {
+    const principal = principals.get(key);
+    if (!principal) return;
+    principal.downgradeTimer = null;
+    const aggregate = aggregateConnections(principal.connections);
+    if (aggregate.state === "in_channel") return;
+    if (aggregate.state === "reconnecting" || aggregate.state === "multi_channel") {
+      scheduleDowngrade(key, principal);
+      return;
+    }
+    const announced = principal.announcedLocation;
+    principal.announcedLocation = LOBBY_LOCATION;
+    if (announced.state === "in_channel") {
+      broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName });
+    }
+  }
+
+  function fireOffline(key) {
+    const entry = pendingOffline.get(key);
+    if (!entry) return;
+    pendingOffline.delete(key);
+    if (entry.announcedLocation.state === "in_channel") {
+      broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(entry.profile), channelId: entry.announcedLocation.channelId, channelName: entry.announcedLocation.channelName });
+    }
+  }
+
+  // announcedLocation 是“听众已知”的稳定位置：进入频道立即播报，
+  // 离开走降级定时器（graceMs 内恢复则静默），reconnecting/multi_channel 不改变它。
+  function evaluateAnnouncedLocation(key, principal) {
+    const aggregate = aggregateConnections(principal.connections);
+    if (aggregate.state === "in_channel") {
+      const announced = principal.announcedLocation;
+      if (announced.state === "in_channel" && announced.channelId === aggregate.channelId) {
+        if (principal.downgradeTimer) {
+          clearTimeout(principal.downgradeTimer);
+          principal.downgradeTimer = null;
+        }
+        return;
+      }
+      if (principal.downgradeTimer) {
+        clearTimeout(principal.downgradeTimer);
+        principal.downgradeTimer = null;
+      }
+      principal.announcedLocation = { state: "in_channel", channelId: aggregate.channelId, channelName: aggregate.channelName };
+      if (consumeRecentMove(key, aggregate.channelId)) return;
+      const actor = announcementActor(principal.profile);
+      if (announced.state === "in_channel") {
+        broadcastAnnouncement({ eventType: "channel_left", actor, channelId: announced.channelId, channelName: announced.channelName });
+      }
+      broadcastAnnouncement({ eventType: "channel_joined", actor, channelId: aggregate.channelId, channelName: aggregate.channelName });
+      return;
+    }
+    if (aggregate.state !== "lobby") return;
+    if (principal.announcedLocation.state !== "in_channel") return;
+    scheduleDowngrade(key, principal);
+  }
+
+  function announceServerJoined(principal) {
+    if (Date.now() - startedAt < startupQuietMs) return;
+    broadcastAnnouncement({ eventType: "server_joined", actor: announcementActor(principal.profile) });
   }
 
   function sendCommandToChannelConnection(identity, sourceChannelId, command) {
@@ -104,6 +247,7 @@ export function createPresenceService(options = {}) {
     match.state.channelId = nextState.channelId;
     match.state.channelName = nextState.channelName;
     match.state.updatedAt = Date.now();
+    evaluateAnnouncedLocation(match.key, match.principal);
     broadcast();
     return true;
   }
@@ -128,7 +272,20 @@ export function createPresenceService(options = {}) {
   function removeConnection(key, connection) {
     const principal = principals.get(key);
     if (!principal || !principal.connections.delete(connection)) return;
-    if (!principal.connections.size) principals.delete(key);
+    if (!principal.connections.size) {
+      principals.delete(key);
+      if (principal.downgradeTimer) {
+        clearTimeout(principal.downgradeTimer);
+        principal.downgradeTimer = null;
+      }
+      const previous = pendingOffline.get(key);
+      if (previous) clearTimeout(previous.timer);
+      const timer = setTimeout(() => fireOffline(key), announcementGraceMs);
+      timer.unref?.();
+      pendingOffline.set(key, { announcedLocation: principal.announcedLocation, profile: principal.profile, timer });
+    } else {
+      evaluateAnnouncedLocation(key, principal);
+    }
     broadcast();
   }
 
@@ -140,8 +297,21 @@ export function createPresenceService(options = {}) {
         publicPresenceId: randomUUID(),
         profile: profileFor(user),
         connections: new Map(),
+        announcedLocation: LOBBY_LOCATION,
+        downgradeTimer: null,
       };
       principals.set(key, principal);
+      const offline = pendingOffline.get(key);
+      if (offline) {
+        // graceMs 内重连（刷新/网络抖动）：恢复已播报位置，不再播欢迎
+        clearTimeout(offline.timer);
+        pendingOffline.delete(key);
+        principal.announcedLocation = offline.announcedLocation;
+      } else {
+        // 从 0 连接变为 1 连接才算真正进入服务器；此时新连接尚未注册，
+        // 欢迎语只发给其他在线成员，自己不播自己的登录
+        announceServerJoined(principal);
+      }
     } else {
       principal.profile = profileFor(user);
     }
@@ -182,10 +352,12 @@ export function createPresenceService(options = {}) {
         state.state = message.state; state.channelId = channel.id; state.channelName = channel.name;
       }
       state.updatedAt = Date.now();
+      evaluateAnnouncedLocation(key, principal);
       broadcast();
     });
     connection.on("close", () => removeConnection(key, connection));
     connection.on("error", () => removeConnection(key, connection));
+    evaluateAnnouncedLocation(key, principal);
     broadcast();
   }
 
@@ -296,14 +468,21 @@ export function createPresenceService(options = {}) {
     runIdentityRevalidation,
     sendCommandToChannelConnection,
     setConnectionLocation,
+    broadcastAnnouncement,
+    noteParticipantMoved,
     addConnection,
     close: () => {
       if (timer) clearInterval(timer);
       for (const principal of principals.values()) {
+        if (principal.downgradeTimer) clearTimeout(principal.downgradeTimer);
+        principal.downgradeTimer = null;
         for (const connection of principal.connections.keys()) {
           closeAbnormalConnection(connection);
         }
       }
+      for (const entry of pendingOffline.values()) clearTimeout(entry.timer);
+      pendingOffline.clear();
+      recentMoves.clear();
       wss.close();
     },
     broadcast,
