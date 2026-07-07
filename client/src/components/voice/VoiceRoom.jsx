@@ -6,7 +6,9 @@ import NetworkStats from "./NetworkStats";
 import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import useAudioDevices from "../../hooks/useAudioDevices";
+import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
+import { getAudioElementPatch, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
 import { getLocalServerMuteTransition, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
@@ -105,6 +107,25 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     audioElements.current.clear();
   }, []);
 
+  const { prefs: localAudioPrefs, setMemberVolume, setMemberLocalMuted } = useLocalAudioPreferences();
+  const localAudioPrefsRef = useRef(localAudioPrefs);
+
+  // 将 Deafen + 本地偏好应用到所有已存在的远端音频元素：
+  // muted 只由 Deafen 控制，本地静音/单成员音量映射到 element.volume（clamp 到 1）。
+  const applyLocalAudioPrefs = useCallback(() => {
+    for (const entry of audioElements.current.values()) {
+      const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(entry.participantIdentity));
+      const patch = getAudioElementPatch({ deafened: deafenRef.current, localMuted: pref.muted, volume: pref.volume });
+      entry.element.muted = patch.muted;
+      entry.element.volume = patch.volume;
+    }
+  }, []);
+
+  useEffect(() => {
+    localAudioPrefsRef.current = localAudioPrefs;
+    applyLocalAudioPrefs();
+  }, [localAudioPrefs, applyLocalAudioPrefs]);
+
   useEffect(() => {
     const currentGeneration = ++generation.current;
     const attemptId = ++connectAttemptRef.current;
@@ -125,15 +146,19 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
     const valid = () => generation.current === currentGeneration && isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId });
     const sync = (options = {}) => valid() && syncParticipants(activeRoom, options);
-    const attachAudio = (track, publication) => {
+    const attachAudio = (track, publication, participant) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
       const element = track.attach();
       element.autoplay = true;
       element.controls = false;
       element.className = "voice-remote-audio";
-      element.muted = deafenRef.current;
+      const participantIdentity = participant?.identity || "";
+      const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(participantIdentity));
+      const patch = getAudioElementPatch({ deafened: deafenRef.current, localMuted: pref.muted, volume: pref.volume });
+      element.muted = patch.muted;
+      element.volume = patch.volume;
       document.body.appendChild(element);
-      audioElements.current.set(publication.trackSid, { track, element });
+      audioElements.current.set(publication.trackSid, { track, element, participantIdentity });
       element.play().catch(() => valid() && setAudioBlocked(true));
     };
     const detachAudio = (track, publication) => {
@@ -191,7 +216,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.TrackUnpublished, sync)
       .on(RoomEvent.ParticipantMetadataChanged, (metadata, participant) => sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }))
       .on(RoomEvent.ParticipantPermissionsChanged, (participant) => { if (!valid()) return; sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }); })
-      .on(RoomEvent.TrackSubscribed, (track, publication) => { if (!valid()) return; attachAudio(track, publication); sync(); })
+      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => { if (!valid()) return; attachAudio(track, publication, participant); sync(); })
       .on(RoomEvent.TrackUnsubscribed, (track, publication) => { if (!valid()) return; detachAudio(track, publication); sync(); })
       .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
       .on(RoomEvent.DataReceived, onData);
@@ -272,13 +297,13 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       if (!deafenRef.current) {
         restoreMicrophone.current = microphoneEnabled;
         if (microphoneEnabled) await activeRoom.localParticipant.setMicrophoneEnabled(false);
-        for (const { element } of audioElements.current.values()) element.muted = true;
         deafenRef.current = true;
+        applyLocalAudioPrefs();
         setDeafen(true);
         setMicrophoneEnabled(false);
       } else {
-        for (const { element } of audioElements.current.values()) element.muted = false;
         deafenRef.current = false;
+        applyLocalAudioPrefs();
         setDeafen(false);
         if (restoreMicrophone.current) {
           await activeRoom.localParticipant.setMicrophoneEnabled(true);
@@ -393,7 +418,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
           </div>
           <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
-        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} />
+        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
       <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={() => onLeave?.()} />
