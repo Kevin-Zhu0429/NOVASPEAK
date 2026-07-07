@@ -159,13 +159,16 @@ const announcementsOf = (connection) => connection.messages.filter((message) => 
 const observerUser = { id: "observer-id", displayName: "OBSERVER", role: "member", isGuest: false, positions: [], positionNames: [] };
 const ANNOUNCE_GRACE_MS = 25;
 
-function createAnnouncementFixture() {
+function createAnnouncementFixture(overrides = {}) {
   const service = createPresenceService({
     heartbeatMs: 60_000,
     autoHeartbeat: false,
     startupQuietMs: 0,
     announcementGraceMs: ANNOUNCE_GRACE_MS,
+    moveWindowMs: 500,
+    moveSettleMs: 60,
     channelLookup: (id) => ({ cs2: { id: "cs2", name: "CS2" }, apex: { id: "apex", name: "Apex" } })[id] || null,
+    ...overrides,
   });
   const observer = new FakeConnection();
   service.addConnection(observer, {}, observerUser);
@@ -257,16 +260,103 @@ test("最后一个连接断开且未重连时，宽限期后产生 channel_left"
   service.close();
 });
 
-test("noteParticipantMoved 后的频道变化不额外产生进入/离开（含 :voice: 后缀归一化）", async () => {
+test("移动窗口内 channel1 → channel2 不播进出（含 :voice: 后缀归一化）", async () => {
   const { service, observer } = createAnnouncementFixture();
   const connection = new FakeConnection();
   service.addConnection(connection, {}, formalUser);
   connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
   const baseline = announcementsOf(observer).length;
-  assert.equal(service.noteParticipantMoved("database-id:voice:conn-123", "apex"), true);
+  assert.equal(service.beginParticipantMove("database-id:voice:conn-123", "apex", "Apex"), true);
   connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
   await sleep(ANNOUNCE_GRACE_MS * 4);
   assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("移动经过 lobby 中转时也不播进出：抑制不是一次性消费", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id", "apex", "Apex");
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "lobby", channelId: null }));
+  await sleep(ANNOUNCE_GRACE_MS * 2);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("移动经过 reconnecting 中转时也不播进出", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id", "apex", "Apex");
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "reconnecting", channelId: "cs2" }));
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("移动经过离线中转（断开重连）时也不播进出和欢迎", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const first = new FakeConnection();
+  service.addConnection(first, {}, formalUser);
+  first.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id", "apex", "Apex");
+  first.emit("close");
+  const second = new FakeConnection();
+  service.addConnection(second, {}, formalUser);
+  second.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("服务端 setConnectionLocation 与客户端 set-location 双路径不造成重复进出播报", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id:voice:conn-9", "apex", "Apex");
+  assert.equal(service.setConnectionLocation("database-id", "cs2", { state: "in_channel", channelId: "apex", channelName: "Apex" }), true);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  await sleep(ANNOUNCE_GRACE_MS * 4);
+  assert.equal(announcementsOf(observer).length, baseline);
+  service.close();
+});
+
+test("移动窗口过期后，普通进入/离开频道恢复正常播报", async () => {
+  const { service, observer } = createAnnouncementFixture({ moveWindowMs: 30, moveSettleMs: 20 });
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id", "apex", "Apex");
+  await sleep(100);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  const events = announcementsOf(observer).slice(baseline);
+  assert.deepEqual(events.map((item) => item.eventType), ["channel_left", "channel_joined"]);
+  service.close();
+});
+
+test("cancelParticipantMove 后恢复正常播报", async () => {
+  const { service, observer } = createAnnouncementFixture();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, formalUser);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "cs2" }));
+  const baseline = announcementsOf(observer).length;
+  service.beginParticipantMove("database-id:voice:x", "apex", "Apex");
+  assert.equal(service.cancelParticipantMove("database-id:voice:x"), true);
+  connection.emit("message", JSON.stringify({ type: "presence:set-location", state: "in_channel", channelId: "apex" }));
+  const events = announcementsOf(observer).slice(baseline);
+  assert.deepEqual(events.map((item) => item.eventType), ["channel_left", "channel_joined"]);
   service.close();
 });
 

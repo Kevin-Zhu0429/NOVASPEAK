@@ -21,7 +21,8 @@ function makeService({ participants = [target] } = {}) {
     moves: [],
     setConnectionLocation(identity, source, next) { this.events.push(["set", identity, source, next]); return true; },
     sendCommandToChannelConnection(identity, channel, command) { this.events.push(["cmd", identity, channel, command.command]); return true; },
-    noteParticipantMoved(identity, targetChannelId) { this.moves.push([identity, targetChannelId]); return true; },
+    beginParticipantMove(identity, targetChannelId, targetChannelName) { this.moves.push(["begin", identity, targetChannelId, targetChannelName]); return true; },
+    cancelParticipantMove(identity) { this.moves.push(["cancel", identity]); return true; },
     broadcastAnnouncement(event) { this.announcements.push(event); return event; },
   };
   const service = createVoiceManagementService({
@@ -135,16 +136,45 @@ test("repeat mute repairs missing metadata and restored permissions", async () =
 
 // ---------- 3B：移动 / 服务器静音的播报事件 ----------
 
-test("move 成功产生一条 channel_moved 且登记移动目标，不额外产生进入/离开", async () => {
-  const { service, presence } = makeService();
+test("move 在 LiveKit 移动前开启抑制窗口，成功后只产生一条 channel_moved", async () => {
+  const { service, calls, presence } = makeService();
   await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
-  assert.deepEqual(presence.moves, [["target-id", "apex"]]);
+  assert.deepEqual(presence.moves, [["begin", "target-id", "apex", "Apex"]]);
+  // beginParticipantMove 必须先于 roomService.moveParticipant 被调用
+  assert.equal(calls.some((call) => call[0] === "move"), true);
   assert.equal(presence.announcements.length, 1);
   assert.equal(presence.announcements[0].eventType, "channel_moved");
   assert.equal(presence.announcements[0].channelName, "Apex");
   assert.equal(presence.announcements[0].channelId, "apex");
   assert.equal(presence.announcements[0].actor.displayName, "目标成员");
   assert.equal(presence.announcements.some((item) => ["channel_joined", "channel_left"].includes(item.eventType)), false);
+});
+
+test("move 失败时清理移动窗口且不发送 channel_moved", async () => {
+  const calls = [];
+  const presence = {
+    moves: [],
+    announcements: [],
+    beginParticipantMove(identity, targetChannelId, targetChannelName) { this.moves.push(["begin", identity, targetChannelId, targetChannelName]); return true; },
+    cancelParticipantMove(identity) { this.moves.push(["cancel", identity]); return true; },
+    broadcastAnnouncement(event) { this.announcements.push(event); return event; },
+    setConnectionLocation() { return true; },
+    sendCommandToChannelConnection() { return true; },
+  };
+  const service = createVoiceManagementService({
+    roomService: {
+      async listParticipants() { return [target]; },
+      async mutePublishedTrack() {},
+      async updateParticipant() {},
+      async removeParticipant() {},
+      async moveParticipant() { calls.push("move"); throw new Error("LiveKit move failed"); },
+    },
+    channelLookup(id) { return { cs2: { id: "cs2", name: "CS2" }, apex: { id: "apex", name: "Apex" } }[id] || null; },
+    presenceService: presence,
+  });
+  await assert.rejects(() => service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" }), /LiveKit move failed/);
+  assert.deepEqual(presence.moves, [["begin", "target-id", "apex", "Apex"], ["cancel", "target-id"]]);
+  assert.equal(presence.announcements.length, 0);
 });
 
 test("服务器静音只在首次成功时产生 server_muted，alreadyMuted 与 unmute 不播报", async () => {

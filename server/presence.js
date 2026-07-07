@@ -48,10 +48,15 @@ export function createPresenceService(options = {}) {
   // 服务重启后的 startupQuietMs 内不播欢迎，避免全员重连造成欢迎风暴。
   const announcementGraceMs = options.announcementGraceMs ?? 10_000;
   const startupQuietMs = options.startupQuietMs ?? 15_000;
+  // 移动窗口：beginParticipantMove 在 LiveKit move 之前开窗，窗口内该成员的所有
+  // 位置变化（含 lobby/reconnecting/离线中转、双路径重复更新）都不播进出频道；
+  // 到达目标频道后再保留 moveSettleMs 吸收迟到的 set-location。
+  const moveWindowMs = options.moveWindowMs ?? 10_000;
+  const moveSettleMs = options.moveSettleMs ?? 1_500;
   const announcementIdFactory = options.announcementIdFactory ?? randomUUID;
   const startedAt = Date.now();
   const pendingOffline = new Map();
-  const recentMoves = new Map();
+  const pendingMoves = new Map();
   const wss = new WebSocketServer({
     noServer: true,
     clientTracking: false,
@@ -146,24 +151,37 @@ export function createPresenceService(options = {}) {
     return baseId.startsWith("guest:") ? baseId : `user:${baseId}`;
   }
 
-  // 移动成员成功后调用：随后到达目标频道的位置变化不再播进入/离开（由 channel_moved 覆盖）。
-  function noteParticipantMoved(participantIdentity, targetChannelId) {
+  // 在 LiveKit moveParticipant 之前调用：开启该成员的移动抑制窗口。
+  // 窗口不是一次性消费——move 过程可能产生多次位置更新
+  // （客户端 set-location 回传与服务端 setConnectionLocation 双路径、中转 lobby/reconnecting）。
+  function beginParticipantMove(participantIdentity, targetChannelId, targetChannelName = "") {
     const key = principalKeyForParticipantIdentity(participantIdentity);
     if (!key || typeof targetChannelId !== "string" || !targetChannelId) return false;
-    recentMoves.set(key, { channelId: targetChannelId, at: Date.now() });
+    const now = Date.now();
+    pendingMoves.set(key, {
+      targetChannelId,
+      targetChannelName: typeof targetChannelName === "string" ? targetChannelName : "",
+      startedAt: now,
+      expiresAt: now + moveWindowMs,
+    });
     return true;
   }
 
-  function consumeRecentMove(key, channelId) {
-    const entry = recentMoves.get(key);
-    if (!entry) return false;
-    if (Date.now() - entry.at > announcementGraceMs) {
-      recentMoves.delete(key);
-      return false;
+  // move 失败时清理窗口，恢复正常进出播报。
+  function cancelParticipantMove(participantIdentity) {
+    const key = principalKeyForParticipantIdentity(participantIdentity);
+    if (!key) return false;
+    return pendingMoves.delete(key);
+  }
+
+  function activePendingMove(key) {
+    const entry = pendingMoves.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      pendingMoves.delete(key);
+      return null;
     }
-    if (entry.channelId !== channelId) return false;
-    recentMoves.delete(key);
-    return true;
+    return entry;
   }
 
   function scheduleDowngrade(key, principal) {
@@ -184,7 +202,7 @@ export function createPresenceService(options = {}) {
     }
     const announced = principal.announcedLocation;
     principal.announcedLocation = LOBBY_LOCATION;
-    if (announced.state === "in_channel") {
+    if (announced.state === "in_channel" && !activePendingMove(key)) {
       broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName });
     }
   }
@@ -193,7 +211,7 @@ export function createPresenceService(options = {}) {
     const entry = pendingOffline.get(key);
     if (!entry) return;
     pendingOffline.delete(key);
-    if (entry.announcedLocation.state === "in_channel") {
+    if (entry.announcedLocation.state === "in_channel" && !activePendingMove(key)) {
       broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(entry.profile), channelId: entry.announcedLocation.channelId, channelName: entry.announcedLocation.channelName });
     }
   }
@@ -202,21 +220,22 @@ export function createPresenceService(options = {}) {
   // 离开走降级定时器（graceMs 内恢复则静默），reconnecting/multi_channel 不改变它。
   function evaluateAnnouncedLocation(key, principal) {
     const aggregate = aggregateConnections(principal.connections);
+    const pendingMove = activePendingMove(key);
     if (aggregate.state === "in_channel") {
       const announced = principal.announcedLocation;
-      if (announced.state === "in_channel" && announced.channelId === aggregate.channelId) {
-        if (principal.downgradeTimer) {
-          clearTimeout(principal.downgradeTimer);
-          principal.downgradeTimer = null;
-        }
-        return;
-      }
       if (principal.downgradeTimer) {
         clearTimeout(principal.downgradeTimer);
         principal.downgradeTimer = null;
       }
+      if (announced.state === "in_channel" && announced.channelId === aggregate.channelId) return;
       principal.announcedLocation = { state: "in_channel", channelId: aggregate.channelId, channelName: aggregate.channelName };
-      if (consumeRecentMove(key, aggregate.channelId)) return;
+      if (pendingMove) {
+        // 移动窗口内静默更新 announcedLocation；到达目标后保留短暂 settle 抑制
+        if (aggregate.channelId === pendingMove.targetChannelId) {
+          pendingMove.expiresAt = Date.now() + moveSettleMs;
+        }
+        return;
+      }
       const actor = announcementActor(principal.profile);
       if (announced.state === "in_channel") {
         broadcastAnnouncement({ eventType: "channel_left", actor, channelId: announced.channelId, channelName: announced.channelName });
@@ -226,6 +245,11 @@ export function createPresenceService(options = {}) {
     }
     if (aggregate.state !== "lobby") return;
     if (principal.announcedLocation.state !== "in_channel") return;
+    if (pendingMove) {
+      // 移动中转 lobby：静默更新，不排降级播报
+      principal.announcedLocation = LOBBY_LOCATION;
+      return;
+    }
     scheduleDowngrade(key, principal);
   }
 
@@ -469,7 +493,8 @@ export function createPresenceService(options = {}) {
     sendCommandToChannelConnection,
     setConnectionLocation,
     broadcastAnnouncement,
-    noteParticipantMoved,
+    beginParticipantMove,
+    cancelParticipantMove,
     addConnection,
     close: () => {
       if (timer) clearInterval(timer);
@@ -482,7 +507,7 @@ export function createPresenceService(options = {}) {
       }
       for (const entry of pendingOffline.values()) clearTimeout(entry.timer);
       pendingOffline.clear();
-      recentMoves.clear();
+      pendingMoves.clear();
       wss.close();
     },
     broadcast,

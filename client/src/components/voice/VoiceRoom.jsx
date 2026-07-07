@@ -9,7 +9,7 @@ import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
 import { getAudioElementPatch, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
-import { getLocalServerMuteTransition, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
+import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
 
@@ -62,6 +62,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const refreshDevices = devices.refresh;
   const previousLocalServerMutedRef = useRef(null);
   const localServerMuteInitializedRef = useRef(false);
+  const microphoneEnabledRef = useRef(false);
+  const wasMicEnabledBeforeServerMuteRef = useRef(null);
   const voiceConnectionIdRef = useRef(null);
   if (!voiceConnectionIdRef.current) {
     const storageKey = "novaVoiceConnectionId";
@@ -78,17 +80,51 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   useEffect(() => { onChannelsChangedRef.current = onChannelsChanged; }, [onChannelsChanged]);
   useEffect(() => { onPresenceLocationChangeRef.current = onPresenceLocationChange; }, [onPresenceLocationChange]);
   useEffect(() => { refreshDevicesRef.current = refreshDevices; }, [refreshDevices]);
+  useEffect(() => { microphoneEnabledRef.current = microphoneEnabled; }, [microphoneEnabled]);
+
+  // 解除服务器静音后恢复麦克风：LiveKit permission/metadata 恢复有短暂延迟，
+  // 轻量延迟 + 最多 3 次重试；房间切换、Deafen、再次被禁音时中止。
+  const restoreMicrophoneAfterServerUnmute = useCallback(async () => {
+    const activeRoom = roomRef.current;
+    if (!activeRoom) return;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150 + attempt * 150));
+      if (roomRef.current !== activeRoom) return;
+      if (deafenRef.current) return;
+      if (isParticipantServerMuted(activeRoom.localParticipant)) return;
+      try {
+        await activeRoom.localParticipant.setMicrophoneEnabled(true);
+        if (roomRef.current !== activeRoom) return;
+        setMicrophoneEnabled(true);
+        setOperationMessage(MICROPHONE_RESTORED_MESSAGE);
+        return;
+      } catch (restoreError) {
+        console.error("解除服务器静音后恢复麦克风失败：", restoreError);
+      }
+    }
+    if (roomRef.current === activeRoom) setOperationMessage(MICROPHONE_RESTORE_FAILED_MESSAGE);
+  }, []);
 
   const syncLocalServerMuteStatus = useCallback((activeRoom, { notify = false } = {}) => {
     if (!activeRoom?.localParticipant) return false;
     const current = isParticipantServerMuted(activeRoom.localParticipant);
     const transition = getLocalServerMuteTransition(previousLocalServerMutedRef.current, current, localServerMuteInitializedRef.current);
+    const plan = getServerMuteMicrophonePlan({
+      isLocal: true,
+      previousServerMuted: previousLocalServerMutedRef.current === true,
+      currentServerMuted: current,
+      microphoneEnabled: microphoneEnabledRef.current,
+      rememberedMicEnabled: wasMicEnabledBeforeServerMuteRef.current,
+    });
     previousLocalServerMutedRef.current = transition.current;
     localServerMuteInitializedRef.current = true;
+    wasMicEnabledBeforeServerMuteRef.current = plan.rememberedMicEnabled;
     if (transition.current) setMicrophoneEnabled(false);
-    if (notify && transition.message) setOperationMessage(transition.message);
+    const shouldRestore = plan.shouldRestoreMicrophone && !deafenRef.current;
+    if (notify && transition.message) setOperationMessage(shouldRestore ? MICROPHONE_RESTORING_MESSAGE : transition.message);
+    if (shouldRestore) restoreMicrophoneAfterServerUnmute();
     return transition.current;
-  }, []);
+  }, [restoreMicrophoneAfterServerUnmute]);
 
   const syncParticipants = useCallback((activeRoom, options = {}) => {
     if (!activeRoom) return;
