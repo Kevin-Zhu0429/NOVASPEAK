@@ -2,7 +2,7 @@ import VoiceParticipantCard from "./VoiceParticipantCard";
 import OnlineMembersPanel from "../presence/OnlineMembersPanel";
 import { useState } from "react";
 
-export default function VoiceParticipantList({ participants, participantLoss, onlineMembers, presenceStatus, currentUser, currentChannel, channels, participantBusy, onManageParticipant, onLocalAudioChange }) {
+export default function VoiceParticipantList({ participants, participantLoss, onlineMembers, presenceStatus, currentUser, currentChannel, channels, participantBusy, onManageParticipant }) {
   const [tab, setTab] = useState("channel");
   return (
     <aside className="voice-participants-panel">
@@ -24,7 +24,6 @@ export default function VoiceParticipantList({ participants, participantLoss, on
               busy={participantBusy === item.id}
               anyBusy={Boolean(participantBusy)}
               onManageParticipant={onManageParticipant}
-              onLocalAudioChange={onLocalAudioChange}
             />
           ))}
         </div>

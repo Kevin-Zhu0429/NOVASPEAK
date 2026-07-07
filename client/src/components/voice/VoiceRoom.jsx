@@ -10,7 +10,6 @@ import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
 import { getLocalServerMuteTransition, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
-import { getAudioElementPatch, getLocalAudioMemberKey, getLocalAudioPreference, readLocalAudioPreferences, writeLocalAudioPreference } from "../../utils/local-audio-preferences";
 
 const CHAT_TOPIC = "nova-chat";
 
@@ -43,11 +42,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [baselineVersion, setBaselineVersion] = useState(0);
   const [operationMessage, setOperationMessage] = useState("");
   const [participantBusy, setParticipantBusy] = useState("");
-  const [localAudioPrefs, setLocalAudioPrefs] = useState(() => readLocalAudioPreferences());
   const roomRef = useRef(null);
   const audioElements = useRef(new Map());
   const deafenRef = useRef(false);
-  const localAudioPrefsRef = useRef(localAudioPrefs);
   const restoreMicrophone = useRef(false);
   const generation = useRef(0);
   const connectAttemptRef = useRef(0);
@@ -79,7 +76,6 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   useEffect(() => { onChannelsChangedRef.current = onChannelsChanged; }, [onChannelsChanged]);
   useEffect(() => { onPresenceLocationChangeRef.current = onPresenceLocationChange; }, [onPresenceLocationChange]);
   useEffect(() => { refreshDevicesRef.current = refreshDevices; }, [refreshDevices]);
-  useEffect(() => { localAudioPrefsRef.current = localAudioPrefs; }, [localAudioPrefs]);
 
   const syncLocalServerMuteStatus = useCallback((activeRoom, { notify = false } = {}) => {
     if (!activeRoom?.localParticipant) return false;
@@ -92,30 +88,14 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     return transition.current;
   }, []);
 
-  const withLocalAudioPreference = useCallback((view) => {
-    const preference = localAudioPrefsRef.current[view.memberKey] || getLocalAudioPreference(view.memberKey);
-    return { ...view, localVolume: preference.volume, localMuted: preference.muted };
-  }, []);
-
   const syncParticipants = useCallback((activeRoom, options = {}) => {
     if (!activeRoom) return;
     syncLocalServerMuteStatus(activeRoom, options);
     setParticipants([
-      withLocalAudioPreference(participantView(activeRoom.localParticipant, true)),
-      ...Array.from(activeRoom.remoteParticipants.values()).map((participant) => withLocalAudioPreference(participantView(participant))),
+      participantView(activeRoom.localParticipant, true),
+      ...Array.from(activeRoom.remoteParticipants.values()).map((participant) => participantView(participant)),
     ]);
-  }, [syncLocalServerMuteStatus, withLocalAudioPreference]);
-
-  const applyLocalAudioToElement = useCallback((element, memberKey) => {
-    const preference = localAudioPrefsRef.current[memberKey] || getLocalAudioPreference(memberKey);
-    const patch = getAudioElementPatch(preference, { deafened: deafenRef.current });
-    element.muted = patch.muted;
-    element.volume = patch.volume;
-  }, []);
-
-  const applyLocalAudioPreferences = useCallback(() => {
-    for (const { element, memberKey } of audioElements.current.values()) applyLocalAudioToElement(element, memberKey);
-  }, [applyLocalAudioToElement]);
+  }, [syncLocalServerMuteStatus]);
 
   const cleanupAudio = useCallback(() => {
     for (const { track, element } of audioElements.current.values()) {
@@ -145,16 +125,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
     const valid = () => generation.current === currentGeneration && isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId });
     const sync = (options = {}) => valid() && syncParticipants(activeRoom, options);
-    const attachAudio = (track, publication, participant) => {
+    const attachAudio = (track, publication) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
       const element = track.attach();
       element.autoplay = true;
       element.controls = false;
       element.className = "voice-remote-audio";
-      const memberKey = getLocalAudioMemberKey({ identity: participant?.identity || publication.participant?.identity || publication.participantIdentity, metadata: participant?.metadata || publication.participant?.metadata });
-      applyLocalAudioToElement(element, memberKey);
+      element.muted = deafenRef.current;
       document.body.appendChild(element);
-      audioElements.current.set(publication.trackSid, { track, element, memberKey });
+      audioElements.current.set(publication.trackSid, { track, element });
       element.play().catch(() => valid() && setAudioBlocked(true));
     };
     const detachAudio = (track, publication) => {
@@ -212,7 +191,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.TrackUnpublished, sync)
       .on(RoomEvent.ParticipantMetadataChanged, (metadata, participant) => sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }))
       .on(RoomEvent.ParticipantPermissionsChanged, (participant) => { if (!valid()) return; sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }); })
-      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => { if (!valid()) return; attachAudio(track, publication, participant); sync(); })
+      .on(RoomEvent.TrackSubscribed, (track, publication) => { if (!valid()) return; attachAudio(track, publication); sync(); })
       .on(RoomEvent.TrackUnsubscribed, (track, publication) => { if (!valid()) return; detachAudio(track, publication); sync(); })
       .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
       .on(RoomEvent.DataReceived, onData);
@@ -264,7 +243,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       const disconnected = cleanupVoiceRoomAttempt({ room: activeRoom, roomRef, disconnectReasonRef, reason: "effect-cleanup" });
       if (disconnected) voiceLifecycleDebug("disconnect-called", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, reason: "effect-cleanup" });
     };
-  }, [apiBase, channel.id, retryVersion, cleanupAudio, syncParticipants, applyLocalAudioToElement]);
+  }, [apiBase, channel.id, retryVersion, cleanupAudio, syncParticipants]);
 
   const toggleMicrophone = async () => {
     const activeRoom = roomRef.current;
@@ -293,13 +272,13 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       if (!deafenRef.current) {
         restoreMicrophone.current = microphoneEnabled;
         if (microphoneEnabled) await activeRoom.localParticipant.setMicrophoneEnabled(false);
+        for (const { element } of audioElements.current.values()) element.muted = true;
         deafenRef.current = true;
-        applyLocalAudioPreferences();
         setDeafen(true);
         setMicrophoneEnabled(false);
       } else {
+        for (const { element } of audioElements.current.values()) element.muted = false;
         deafenRef.current = false;
-        applyLocalAudioPreferences();
         setDeafen(false);
         if (restoreMicrophone.current) {
           await activeRoom.localParticipant.setMicrophoneEnabled(true);
@@ -366,18 +345,6 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   };
 
 
-  const updateLocalAudioPreference = (participant, patch) => {
-    if (!participant?.memberKey) return;
-    const nextPreference = writeLocalAudioPreference(participant.memberKey, patch);
-    const nextPreferences = { ...localAudioPrefsRef.current, [participant.memberKey]: nextPreference };
-    localAudioPrefsRef.current = nextPreferences;
-    setLocalAudioPrefs(nextPreferences);
-    for (const { element, memberKey } of audioElements.current.values()) {
-      if (memberKey === participant.memberKey) applyLocalAudioToElement(element, participant.memberKey);
-    }
-    setParticipants((previous) => previous.map((item) => item.memberKey === participant.memberKey ? { ...item, localVolume: nextPreference.volume, localMuted: nextPreference.muted } : item));
-  };
-
   const manageParticipant = async (action, participant, targetChannelId) => {
     if (!participant?.id || participantBusy) return;
     setParticipantBusy(participant.id);
@@ -426,7 +393,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
           </div>
           <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
-        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} onLocalAudioChange={updateLocalAudioPreference} />
+        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
       <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={() => onLeave?.()} />

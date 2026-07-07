@@ -1,6 +1,5 @@
 import { Track } from "livekit-client";
 import { getPositionText } from "./user-display.js";
-import { getLocalAudioMemberKey } from "./local-audio-preferences.js";
 
 export function parseParticipantMetadata(participant) {
   let metadata = {};
@@ -18,8 +17,7 @@ export function parseParticipantMetadata(participant) {
   const displayName = typeof metadata.displayName === "string" && metadata.displayName.trim()
     ? metadata.displayName.trim()
     : participant?.name || participant?.identity || "未知用户";
-  const publicMemberId = typeof metadata.publicMemberId === "string" ? metadata.publicMemberId : (typeof metadata.memberId === "string" ? metadata.memberId : (typeof metadata.userId === "string" ? metadata.userId : undefined));
-  const user = { displayName, role, isGuest: role === "guest" || metadata.isGuest === true, positions, positionNames, serverMuted: metadata.serverMuted === true, publicMemberId };
+  const user = { displayName, role, isGuest: role === "guest" || metadata.isGuest === true, positions, positionNames, serverMuted: metadata.serverMuted === true };
   return { ...user, positionText: getPositionText(user, role ? "队员" : "身份未知") };
 }
 
@@ -32,7 +30,6 @@ export function participantView(participant, isLocal = false) {
   const metadata = parseParticipantMetadata(participant);
   return {
     id: participant?.identity || (isLocal ? "local" : "unknown"),
-    memberKey: getLocalAudioMemberKey({ ...metadata, id: participant?.identity, identity: participant?.identity }),
     participant,
     isLocal,
     ...metadata,
