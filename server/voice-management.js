@@ -125,14 +125,21 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     if (!target) return { status: input.targetChannelId ? 404 : 400, error: input.targetChannelId ? "目标频道不存在" : "请选择有效的目标频道" };
     if (target.id === base.source.id) return { status: 400, error: "目标频道不能与当前频道相同" };
     const state = serverMuteRecords.get(base.identity);
-    await roomService.moveParticipant(base.source.id, base.identity, target.id);
-    if (state?.serverMuted) {
-      state.currentRoomName = target.id;
-      const movedParticipant = await waitForParticipant(target.id, base.identity);
-      if (movedParticipant) await applyServerMutedState(target.id, base.identity, movedParticipant, state);
+    // 在 LiveKit move 之前开启移动抑制窗口：客户端收到 RoomEvent.Moved 后的
+    // set-location 回传可能先于服务端后续步骤到达，开窗必须抢在它前面
+    presenceService?.beginParticipantMove?.(base.identity, target.id, target.name);
+    try {
+      await roomService.moveParticipant(base.source.id, base.identity, target.id);
+      if (state?.serverMuted) {
+        state.currentRoomName = target.id;
+        const movedParticipant = await waitForParticipant(target.id, base.identity);
+        if (movedParticipant) await applyServerMutedState(target.id, base.identity, movedParticipant, state);
+      }
+    } catch (moveError) {
+      // move 失败：清理窗口，恢复正常进出播报，也不发 channel_moved
+      presenceService?.cancelParticipantMove?.(base.identity);
+      throw moveError;
     }
-    // 先登记移动目标，让随后到达目标频道的 Presence 位置变化不再播进入/离开
-    presenceService?.noteParticipantMoved?.(base.identity, target.id);
     presenceService?.setConnectionLocation?.(base.identity, base.source.id, { state: "in_channel", channelId: target.id, channelName: target.name });
     presenceService?.sendCommandToChannelConnection?.(base.identity, target.id, { type: "presence:command", command: "moved-to-channel", requestId: randomId(), sourceChannelId: base.source.id, targetChannelId: target.id, targetChannelName: target.name });
     presenceService?.broadcastAnnouncement?.({ eventType: "channel_moved", actor: { displayName: displayName(base.participant) }, channelId: target.id, channelName: target.name });
