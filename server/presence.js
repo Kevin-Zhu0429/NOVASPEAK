@@ -123,9 +123,25 @@ export function createPresenceService(options = {}) {
     };
   }
 
-  // 播报范围：当前实现广播给全部在线连接；如需按频道筛选，可在此按
-  // principal 的 aggregateConnections 位置过滤（预留扩展点）。
-  function broadcastAnnouncement({ eventType, actor, channelId = null, channelName = "" } = {}) {
+  // 播报范围（scope）：
+  //   { type: "all" }（默认）→ 全部在线连接（server_joined 使用）；
+  //   { type: "channels", channelIds: [...], includeKeys: [...], includeParticipants: [...] }
+  //     → 只发给「当前 location 为 in_channel 且频道命中」的连接（按连接匹配，多标签页
+  //       只发相关频道的标签页；lobby / reconnecting / 离线不算命中），以及
+  //       includeKeys（内部 principal key）/ includeParticipants（LiveKit identity 或
+  //       用户 ID，自动归一化）指定的事件本人 / 操作者的全部连接。
+  function resolveAnnouncementScope(scope) {
+    if (!scope || scope.type !== "channels") return null;
+    const channelIds = new Set((Array.isArray(scope.channelIds) ? scope.channelIds : []).filter((id) => typeof id === "string" && id));
+    const includeKeys = new Set((Array.isArray(scope.includeKeys) ? scope.includeKeys : []).filter((key) => typeof key === "string" && key));
+    for (const identity of Array.isArray(scope.includeParticipants) ? scope.includeParticipants : []) {
+      const key = principalKeyForParticipantIdentity(identity);
+      if (key) includeKeys.add(key);
+    }
+    return { channelIds, includeKeys };
+  }
+
+  function broadcastAnnouncement({ eventType, actor, channelId = null, channelName = "" } = {}, scope = { type: "all" }) {
     if (!ANNOUNCEMENT_EVENT_TYPES.includes(eventType)) return null;
     const payload = {
       type: "announcement",
@@ -136,8 +152,13 @@ export function createPresenceService(options = {}) {
       channelId: typeof channelId === "string" ? channelId : null,
       channelName: typeof channelName === "string" ? channelName : "",
     };
-    for (const principal of principals.values()) {
-      for (const connection of principal.connections.keys()) sendJson(connection, payload);
+    const targets = resolveAnnouncementScope(scope);
+    for (const [key, principal] of principals) {
+      const includeAllConnections = !targets || targets.includeKeys.has(key);
+      for (const [connection, state] of principal.connections) {
+        if (!includeAllConnections && !(state.state === "in_channel" && targets.channelIds.has(state.channelId))) continue;
+        sendJson(connection, payload);
+      }
     }
     return payload;
   }
@@ -203,7 +224,10 @@ export function createPresenceService(options = {}) {
     const announced = principal.announcedLocation;
     principal.announcedLocation = LOBBY_LOCATION;
     if (announced.state === "in_channel" && !activePendingMove(key)) {
-      broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName });
+      broadcastAnnouncement(
+        { eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName },
+        { type: "channels", channelIds: [announced.channelId], includeKeys: [key] },
+      );
     }
   }
 
@@ -212,7 +236,10 @@ export function createPresenceService(options = {}) {
     if (!entry) return;
     pendingOffline.delete(key);
     if (entry.announcedLocation.state === "in_channel" && !activePendingMove(key)) {
-      broadcastAnnouncement({ eventType: "channel_left", actor: announcementActor(entry.profile), channelId: entry.announcedLocation.channelId, channelName: entry.announcedLocation.channelName });
+      broadcastAnnouncement(
+        { eventType: "channel_left", actor: announcementActor(entry.profile), channelId: entry.announcedLocation.channelId, channelName: entry.announcedLocation.channelName },
+        { type: "channels", channelIds: [entry.announcedLocation.channelId], includeKeys: [key] },
+      );
     }
   }
 
@@ -238,9 +265,16 @@ export function createPresenceService(options = {}) {
       }
       const actor = announcementActor(principal.profile);
       if (announced.state === "in_channel") {
-        broadcastAnnouncement({ eventType: "channel_left", actor, channelId: announced.channelId, channelName: announced.channelName });
+        // channel_left 的范围是“原频道”，来自变化前的 announcedLocation
+        broadcastAnnouncement(
+          { eventType: "channel_left", actor, channelId: announced.channelId, channelName: announced.channelName },
+          { type: "channels", channelIds: [announced.channelId], includeKeys: [key] },
+        );
       }
-      broadcastAnnouncement({ eventType: "channel_joined", actor, channelId: aggregate.channelId, channelName: aggregate.channelName });
+      broadcastAnnouncement(
+        { eventType: "channel_joined", actor, channelId: aggregate.channelId, channelName: aggregate.channelName },
+        { type: "channels", channelIds: [aggregate.channelId], includeKeys: [key] },
+      );
       return;
     }
     if (aggregate.state !== "lobby") return;

@@ -23,7 +23,7 @@ function makeService({ participants = [target] } = {}) {
     sendCommandToChannelConnection(identity, channel, command) { this.events.push(["cmd", identity, channel, command.command]); return true; },
     beginParticipantMove(identity, targetChannelId, targetChannelName) { this.moves.push(["begin", identity, targetChannelId, targetChannelName]); return true; },
     cancelParticipantMove(identity) { this.moves.push(["cancel", identity]); return true; },
-    broadcastAnnouncement(event) { this.announcements.push(event); return event; },
+    broadcastAnnouncement(event, scope) { this.announcements.push({ ...event, scope }); return event; },
   };
   const service = createVoiceManagementService({
     roomService: {
@@ -148,6 +148,8 @@ test("move 在 LiveKit 移动前开启抑制窗口，成功后只产生一条 ch
   assert.equal(presence.announcements[0].channelId, "apex");
   assert.equal(presence.announcements[0].actor.displayName, "目标成员");
   assert.equal(presence.announcements.some((item) => ["channel_joined", "channel_left"].includes(item.eventType)), false);
+  // 范围：源频道 + 目标频道 + 被移动者本人 + 操作者
+  assert.deepEqual(presence.announcements[0].scope, { type: "channels", channelIds: ["cs2", "apex"], includeParticipants: ["target-id", "admin-id"] });
 });
 
 test("move 失败时清理移动窗口且不发送 channel_moved", async () => {
@@ -183,6 +185,8 @@ test("服务器静音只在首次成功时产生 server_muted，alreadyMuted 与
   assert.equal(presence.announcements.length, 1);
   assert.equal(presence.announcements[0].eventType, "server_muted");
   assert.equal(presence.announcements[0].actor.displayName, "目标成员");
+  // 范围：目标所在频道 + 目标本人 + 操作者，不再全服
+  assert.deepEqual(presence.announcements[0].scope, { type: "channels", channelIds: ["cs2"], includeParticipants: ["target-id", "admin-id"] });
   const again = await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
   assert.equal(again.alreadyMuted, true);
   assert.equal(presence.announcements.length, 1);
@@ -192,10 +196,11 @@ test("服务器静音只在首次成功时产生 server_muted，alreadyMuted 与
   assert.equal(presence.announcements.length, 1);
 });
 
-test("播报 payload 只包含展示字段，不含敏感信息", async () => {
+test("播报 payload 只包含展示字段，不含敏感信息（scope 是服务器内部路由，不随消息下发）", async () => {
   const { service, presence } = makeService();
   await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
   await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
-  const serialized = JSON.stringify(presence.announcements);
+  const payloads = presence.announcements.map(({ scope: _scope, ...event }) => event);
+  const serialized = JSON.stringify(payloads);
   assert.doesNotMatch(serialized, /admin-id|session|token|cookie|password|secret/i);
 });

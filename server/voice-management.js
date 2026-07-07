@@ -89,8 +89,12 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     await applyServerMutedState(base.source.id, base.identity, base.participant, state);
     serverMuteRecords.set(base.identity, state);
     presenceService?.sendCommandToChannelConnection?.(base.identity, base.source.id, { type: "presence:command", command: "server-muted", requestId: randomId(), sourceChannelId: base.source.id });
-    // 只在“未静音 → 静音”真实成功后播报；alreadyMuted/idempotent 与 unmute 都不播报
-    presenceService?.broadcastAnnouncement?.({ eventType: "server_muted", actor: { displayName: displayName(base.participant) }, channelId: base.source.id, channelName: base.source.name });
+    // 只在“未静音 → 静音”真实成功后播报；alreadyMuted/idempotent 与 unmute 都不播报。
+    // 范围：目标所在频道（mute 要求目标在源频道内）+ 目标本人 + 操作者
+    presenceService?.broadcastAnnouncement?.(
+      { eventType: "server_muted", actor: { displayName: displayName(base.participant) }, channelId: base.source.id, channelName: base.source.name },
+      { type: "channels", channelIds: [base.source.id], includeParticipants: [base.identity, base.actor.id] },
+    );
     return { success: true, ok: true, serverMuted: true, participantName: displayName(base.participant) };
   }
 
@@ -142,7 +146,11 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     }
     presenceService?.setConnectionLocation?.(base.identity, base.source.id, { state: "in_channel", channelId: target.id, channelName: target.name });
     presenceService?.sendCommandToChannelConnection?.(base.identity, target.id, { type: "presence:command", command: "moved-to-channel", requestId: randomId(), sourceChannelId: base.source.id, targetChannelId: target.id, targetChannelName: target.name });
-    presenceService?.broadcastAnnouncement?.({ eventType: "channel_moved", actor: { displayName: displayName(base.participant) }, channelId: target.id, channelName: target.name });
+    // 范围：源频道 + 目标频道 + 被移动者本人 + 操作者；payload 仍只带目标频道名供文案使用
+    presenceService?.broadcastAnnouncement?.(
+      { eventType: "channel_moved", actor: { displayName: displayName(base.participant) }, channelId: target.id, channelName: target.name },
+      { type: "channels", channelIds: [base.source.id, target.id], includeParticipants: [base.identity, base.actor.id] },
+    );
     return { success: true, participantName: displayName(base.participant), targetChannelName: target.name, serverMuted: Boolean(state?.serverMuted) };
   }
 
