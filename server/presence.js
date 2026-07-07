@@ -125,20 +125,26 @@ export function createPresenceService(options = {}) {
 
   // 播报范围（scope）：
   //   { type: "all" }（默认）→ 全部在线连接（server_joined 使用）；
-  //   { type: "channels", channelIds: [...], includeKeys: [...], includeParticipants: [...] }
+  //   { type: "channels", channelIds: [...], includeKeys: [...], excludeKeys: [...], includeParticipants: [...] }
   //     → 只发给「当前 location 为 in_channel 且频道命中」的连接（按连接匹配，多标签页
   //       只发相关频道的标签页；lobby / reconnecting / 离线不算命中），以及
   //       includeKeys（内部 principal key）/ includeParticipants（LiveKit identity 或
-  //       用户 ID，自动归一化）指定的事件本人 / 操作者的全部连接。
+  //       用户 ID，自动归一化）指定的事件本人 / 操作者的全部连接；excludeKeys /
+  //       excludeParticipants 可让普通进出频道播报排除事件本人。
   function resolveAnnouncementScope(scope) {
     if (!scope || scope.type !== "channels") return null;
     const channelIds = new Set((Array.isArray(scope.channelIds) ? scope.channelIds : []).filter((id) => typeof id === "string" && id));
     const includeKeys = new Set((Array.isArray(scope.includeKeys) ? scope.includeKeys : []).filter((key) => typeof key === "string" && key));
+    const excludeKeys = new Set((Array.isArray(scope.excludeKeys) ? scope.excludeKeys : []).filter((key) => typeof key === "string" && key));
     for (const identity of Array.isArray(scope.includeParticipants) ? scope.includeParticipants : []) {
       const key = principalKeyForParticipantIdentity(identity);
       if (key) includeKeys.add(key);
     }
-    return { channelIds, includeKeys };
+    for (const identity of Array.isArray(scope.excludeParticipants) ? scope.excludeParticipants : []) {
+      const key = principalKeyForParticipantIdentity(identity);
+      if (key) excludeKeys.add(key);
+    }
+    return { channelIds, includeKeys, excludeKeys };
   }
 
   function broadcastAnnouncement({ eventType, actor, channelId = null, channelName = "" } = {}, scope = { type: "all" }) {
@@ -154,6 +160,7 @@ export function createPresenceService(options = {}) {
     };
     const targets = resolveAnnouncementScope(scope);
     for (const [key, principal] of principals) {
+      if (targets?.excludeKeys.has(key) && !targets.includeKeys.has(key)) continue;
       const includeAllConnections = !targets || targets.includeKeys.has(key);
       for (const [connection, state] of principal.connections) {
         if (!includeAllConnections && !(state.state === "in_channel" && targets.channelIds.has(state.channelId))) continue;
@@ -226,7 +233,7 @@ export function createPresenceService(options = {}) {
     if (announced.state === "in_channel" && !activePendingMove(key)) {
       broadcastAnnouncement(
         { eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName },
-        { type: "channels", channelIds: [announced.channelId], includeKeys: [key] },
+        { type: "channels", channelIds: [announced.channelId], excludeKeys: [key] },
       );
     }
   }
@@ -238,14 +245,14 @@ export function createPresenceService(options = {}) {
     if (entry.announcedLocation.state === "in_channel" && !activePendingMove(key)) {
       broadcastAnnouncement(
         { eventType: "channel_left", actor: announcementActor(entry.profile), channelId: entry.announcedLocation.channelId, channelName: entry.announcedLocation.channelName },
-        { type: "channels", channelIds: [entry.announcedLocation.channelId], includeKeys: [key] },
+        { type: "channels", channelIds: [entry.announcedLocation.channelId], excludeKeys: [key] },
       );
     }
   }
 
   // announcedLocation 是“听众已知”的稳定位置：进入频道立即播报，
   // 离开走降级定时器（graceMs 内恢复则静默），reconnecting/multi_channel 不改变它。
-  function evaluateAnnouncedLocation(key, principal) {
+  function evaluateAnnouncedLocation(key, principal, options = {}) {
     const aggregate = aggregateConnections(principal.connections);
     const pendingMove = activePendingMove(key);
     if (aggregate.state === "in_channel") {
@@ -268,12 +275,12 @@ export function createPresenceService(options = {}) {
         // channel_left 的范围是“原频道”，来自变化前的 announcedLocation
         broadcastAnnouncement(
           { eventType: "channel_left", actor, channelId: announced.channelId, channelName: announced.channelName },
-          { type: "channels", channelIds: [announced.channelId], includeKeys: [key] },
+          { type: "channels", channelIds: [announced.channelId], excludeKeys: [key] },
         );
       }
       broadcastAnnouncement(
         { eventType: "channel_joined", actor, channelId: aggregate.channelId, channelName: aggregate.channelName },
-        { type: "channels", channelIds: [aggregate.channelId], includeKeys: [key] },
+        { type: "channels", channelIds: [aggregate.channelId], excludeKeys: [key] },
       );
       return;
     }
@@ -282,6 +289,19 @@ export function createPresenceService(options = {}) {
     if (pendingMove) {
       // 移动中转 lobby：静默更新，不排降级播报
       principal.announcedLocation = LOBBY_LOCATION;
+      return;
+    }
+    if (options.immediateLobby === true) {
+      const announced = principal.announcedLocation;
+      principal.announcedLocation = LOBBY_LOCATION;
+      if (principal.downgradeTimer) {
+        clearTimeout(principal.downgradeTimer);
+        principal.downgradeTimer = null;
+      }
+      broadcastAnnouncement(
+        { eventType: "channel_left", actor: announcementActor(principal.profile), channelId: announced.channelId, channelName: announced.channelName },
+        { type: "channels", channelIds: [announced.channelId], excludeKeys: [key] },
+      );
       return;
     }
     scheduleDowngrade(key, principal);
@@ -410,7 +430,7 @@ export function createPresenceService(options = {}) {
         state.state = message.state; state.channelId = channel.id; state.channelName = channel.name;
       }
       state.updatedAt = Date.now();
-      evaluateAnnouncedLocation(key, principal);
+      evaluateAnnouncedLocation(key, principal, { immediateLobby: message.state === "lobby" });
       broadcast();
     });
     connection.on("close", () => removeConnection(key, connection));
