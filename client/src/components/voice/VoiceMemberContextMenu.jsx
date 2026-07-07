@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import { getMemberContextMenuModel } from "../../utils/voice-member-menu";
 import { MAX_MEMBER_VOLUME, MIN_MEMBER_VOLUME } from "../../utils/local-audio-preferences";
 
-export default function VoiceMemberContextMenu({ position, item, currentUser, currentChannel, channels = [], localPref, busy, anyBusy, onClose, onShowProfile, onSetVolume, onSetLocalMuted, onManageParticipant }) {
+export default function VoiceMemberContextMenu({ position, item, currentUser, currentChannel, channels = [], localPref, busy, anyBusy, anchorRef, onClose, onShowProfile, onSetVolume, onSetLocalMuted, onManageParticipant }) {
   const menuRef = useRef(null);
+  const openedAtRef = useRef(0);
+  useEffect(() => { openedAtRef.current = Date.now(); }, []);
   const [style, setStyle] = useState({ top: position.y, left: position.x, visibility: "hidden" });
   const [moveOpen, setMoveOpen] = useState(false);
   const model = getMemberContextMenuModel({ item, currentUser, currentChannel, channels, localPref });
@@ -28,7 +30,14 @@ export default function VoiceMemberContextMenu({ position, item, currentUser, cu
 
   useEffect(() => {
     const onKeyDown = (event) => { if (event.key === "Escape") onClose(); };
-    const onMouseDown = (event) => { if (!menuRef.current?.contains(event.target)) onClose(); };
+    const onMouseDown = (event) => {
+      if (menuRef.current?.contains(event.target)) return;
+      // ⋯ 锚点按钮自带开/关切换，不在这里关闭
+      if (anchorRef?.current && anchorRef.current.contains(event.target)) return;
+      // 长按抬手后浏览器可能补发合成 mousedown，忽略打开瞬间的外部事件
+      if (Date.now() - openedAtRef.current < 350) return;
+      onClose();
+    };
     const onScroll = (event) => {
       if (menuRef.current && event.target instanceof Node && menuRef.current.contains(event.target)) return;
       onClose();
@@ -44,7 +53,7 @@ export default function VoiceMemberContextMenu({ position, item, currentUser, cu
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onResize);
     };
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   const runManagement = (action, targetChannelId) => {
     onClose();
