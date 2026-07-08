@@ -1,9 +1,10 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import UserAvatar from "../common/UserAvatar";
 
 const ROLE_LABELS = { admin: "管理员", member: "战队成员", guest: "访客" };
 
-export default function MemberProfileDialog({ item, memberKey, channelName, localPref, onClose }) {
+export default function MemberProfileDialog({ item, avatarUrl, memberKey, channelName, localPref, onClose }) {
   useEffect(() => {
     const onKeyDown = (event) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKeyDown);
@@ -27,9 +28,12 @@ export default function MemberProfileDialog({ item, memberKey, channelName, loca
     <div className="member-profile-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="member-profile-dialog" role="dialog" aria-modal="true" aria-label="成员资料">
         <header>
-          <div>
-            <span className="voice-eyebrow">MEMBER PROFILE</span>
-            <h3>成员资料</h3>
+          <div className="member-profile-heading">
+            <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="lg" />
+            <div>
+              <span className="voice-eyebrow">MEMBER PROFILE</span>
+              <h3>成员资料</h3>
+            </div>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭成员资料">关闭</button>
         </header>

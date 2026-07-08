@@ -8,6 +8,7 @@ import ChannelManagementPanel from "./components/channels/ChannelManagementPanel
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
+import UserAvatar from "./components/common/UserAvatar";
 import usePresence from "./hooks/usePresence";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
@@ -346,11 +347,11 @@ if (!currentUser) {
             )}
 
             <div className="account-panel">
-              <div className="account-avatar">
-                {currentUser.displayName
-                  .slice(0, 1)
-                  .toUpperCase()}
-              </div>
+              <UserAvatar
+                avatarUrl={currentUser.avatarUrl}
+                displayName={currentUser.displayName}
+                size="md"
+              />
 
               <div className="account-details">
                 <strong>

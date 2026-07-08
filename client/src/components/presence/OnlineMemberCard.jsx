@@ -1,11 +1,12 @@
 import { memo } from "react";
 import { getPresenceDeviceText, getPresenceLocationText, getPresencePositionText } from "../../utils/presence-display";
+import UserAvatar from "../common/UserAvatar";
 
 function OnlineMemberCard({ member }) {
   const deviceText = getPresenceDeviceText(member);
   return (
     <article className={`online-member-card ${member.state}`}>
-      <div className="voice-avatar">{member.nickname.slice(0, 1).toUpperCase()}</div>
+      <UserAvatar avatarUrl={member.avatarUrl} displayName={member.nickname} size="md" status="online" />
       <div className="online-member-copy">
         <strong>{member.nickname}{member.isCurrentUser ? "（我）" : ""}</strong>
         <span>{getPresencePositionText(member)}</span>

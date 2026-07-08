@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getPositionText } from "../../utils/user-display";
+import UserAvatar from "../common/UserAvatar";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const POSITION_OPTIONS = [
@@ -212,7 +213,7 @@ export default function TeamManagement({
               <div className="management-member-list">
                 {members.map((member) => (
                   <div className="management-member" key={member.id}>
-                    <div className="member-avatar">{(member.displayName || "?").slice(0, 1).toUpperCase()}</div>
+                    <UserAvatar avatarUrl={member.avatarUrl} displayName={member.displayName} size="md" />
                     <div className="member-information"><strong>{member.displayName}</strong><span>{getPositionText(member)}</span></div>
                     <div className={member.role === "admin" ? "member-role captain" : "member-role"}>{member.role === "admin" ? "管理员" : "成员"}</div>
                     <button type="button" className="member-edit-button" onClick={() => openEditor(member)}>编辑</button>
