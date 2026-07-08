@@ -100,6 +100,7 @@ export function createPresenceService(options = {}) {
       isGuest: Boolean(user.isGuest),
       positions: user.positions || [],
       positionNames: user.positionNames || [],
+      avatarUrl: typeof user.avatarUrl === "string" ? user.avatarUrl : null,
     };
   }
 

@@ -64,6 +64,7 @@ export function toPublicGuest(payload) {
     isGuest: true,
     positions: [],
     positionNames: [],
+    avatarUrl: null,
     position: "guest",
     positionName: "访客",
   };

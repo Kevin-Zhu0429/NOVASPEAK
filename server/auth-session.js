@@ -8,6 +8,7 @@ import {
   destroyGuestSession,
   getGuestUser,
 } from "./guest-auth.js";
+import { avatarUrlFromPath } from "./avatar.js";
 
 export const SESSION_COOKIE_NAME = "novaspeak_session";
 
@@ -88,6 +89,9 @@ export function toPublicUser(user) {
     // 新的多职位字段
     positions,
     positionNames,
+
+    // 头像公开 URL；未设置时为 null，不暴露磁盘路径
+    avatarUrl: avatarUrlFromPath(user.avatar_path),
 
     // 暂时保留旧字段，兼容欢迎动画
     position: positions[0] || "member",
@@ -195,7 +199,8 @@ export function getCurrentUser(req) {
       users.id,
       users.username,
       users.display_name,
-      users.role
+      users.role,
+      users.avatar_path
 
     FROM sessions
 
