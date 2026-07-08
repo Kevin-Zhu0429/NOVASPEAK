@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createVoiceManagementService } from "./voice-management.js";
+import { createVoiceManagementService, isMoveNotImplementedError } from "./voice-management.js";
 
 const admin = { id: "admin-id", role: "admin", displayName: "Admin" };
 const member = { id: "member-id", role: "member", displayName: "Member", positions: ["captain"] };
@@ -13,14 +13,16 @@ const target = {
   tracks: [{ sid: "mic-track", source: 2 }],
 };
 
-function makeService({ participants = [target] } = {}) {
+function makeService({ participants = [target], moveError = null, voiceControlDelivered = true } = {}) {
   const calls = [];
   const presence = {
     events: [],
     announcements: [],
     moves: [],
+    voiceControls: [],
     setConnectionLocation(identity, source, next) { this.events.push(["set", identity, source, next]); return true; },
     sendCommandToChannelConnection(identity, channel, command) { this.events.push(["cmd", identity, channel, command.command]); return true; },
+    sendVoiceControlToParticipant(identity, sourceChannelId, payload) { this.voiceControls.push([identity, sourceChannelId, payload]); return voiceControlDelivered; },
     beginParticipantMove(identity, targetChannelId, targetChannelName) { this.moves.push(["begin", identity, targetChannelId, targetChannelName]); return true; },
     cancelParticipantMove(identity) { this.moves.push(["cancel", identity]); return true; },
     broadcastAnnouncement(event, scope) { this.announcements.push({ ...event, scope }); return event; },
@@ -31,13 +33,22 @@ function makeService({ participants = [target] } = {}) {
       async mutePublishedTrack(room, identity, trackSid, muted) { calls.push(["muteTrack", room, identity, trackSid, muted]); },
       async updateParticipant(room, identity, options) { calls.push(["update", room, identity, options]); },
       async removeParticipant(room, identity) { calls.push(["remove", room, identity]); },
-      async moveParticipant(room, identity, destination) { calls.push(["move", room, identity, destination]); },
+      async moveParticipant(room, identity, destination) {
+        calls.push(["move", room, identity, destination]);
+        if (moveError) throw moveError;
+      },
     },
     channelLookup(id) { return { cs2: { id: "cs2", name: "CS2" }, apex: { id: "apex", name: "Apex" } }[id] || null; },
     presenceService: presence,
     randomId: () => "request-id",
   });
   return { service, calls, presence };
+}
+
+function twirpNotImplementedError() {
+  const error = new Error("twirp error unknown: not implemented");
+  error.status = 500;
+  return error;
 }
 
 test("voice management role permissions are based only on role", async () => {
@@ -203,4 +214,98 @@ test("播报 payload 只包含展示字段，不含敏感信息（scope 是服�
   const payloads = presence.announcements.map(({ scope: _scope, ...event }) => event);
   const serialized = JSON.stringify(payloads);
   assert.doesNotMatch(serialized, /admin-id|session|token|cookie|password|secret/i);
+});
+
+// ---------- 自建 LiveKit：moveParticipant not implemented 的应用层 fallback ----------
+
+test("isMoveNotImplementedError 只识别 Twirp not implemented，不吞其他错误", () => {
+  assert.equal(isMoveNotImplementedError(twirpNotImplementedError()), true);
+  assert.equal(isMoveNotImplementedError(Object.assign(new Error("x"), { code: "unimplemented" })), true);
+  assert.equal(isMoveNotImplementedError(Object.assign(new Error("x"), { status: 501 })), true);
+  assert.equal(isMoveNotImplementedError(null), false);
+  assert.equal(isMoveNotImplementedError(new Error("unauthorized")), false);
+  assert.equal(isMoveNotImplementedError(Object.assign(new Error("forbidden"), { status: 403 })), false);
+  assert.equal(isMoveNotImplementedError(Object.assign(new Error("participant does not exist"), { status: 404 })), false);
+  assert.equal(isMoveNotImplementedError(new Error("network timeout")), false);
+  assert.equal(isMoveNotImplementedError(Object.assign(new Error("invalid API key"), { status: 401 })), false);
+});
+
+test("moveParticipant 成功时仍走原 LiveKit 路径，不发送 voice_control", async () => {
+  const { service, calls, presence } = makeService();
+  const result = await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.equal(result.success, true);
+  assert.equal(result.movedViaFallback, false);
+  assert.deepEqual(calls.find((call) => call[0] === "move"), ["move", "cs2", "target-id", "apex"]);
+  assert.equal(presence.voiceControls.length, 0);
+});
+
+test("moveParticipant not implemented 时 fallback 到 Presence force_move_channel，只发给目标用户", async () => {
+  const { service, presence } = makeService({ moveError: twirpNotImplementedError() });
+  const result = await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.equal(result.success, true);
+  assert.equal(result.movedViaFallback, true);
+  assert.equal(result.targetChannelName, "Apex");
+  assert.equal(presence.voiceControls.length, 1);
+  const [identity, sourceChannelId, payload] = presence.voiceControls[0];
+  assert.equal(identity, "target-id");
+  assert.equal(sourceChannelId, "cs2");
+  assert.deepEqual(payload, {
+    type: "voice_control",
+    action: "force_move_channel",
+    requestId: "request-id",
+    targetChannelId: "apex",
+    targetChannelName: "Apex",
+    sourceChannelId: "cs2",
+    reason: "admin_move",
+  });
+  // 控制消息不携带 session / cookie / token / secret
+  assert.doesNotMatch(JSON.stringify(payload), /session|cookie|token|secret|password/i);
+});
+
+test("fallback 移动时移动抑制窗口生效且不取消，只播一条 channel_moved", async () => {
+  const { service, presence } = makeService({ moveError: twirpNotImplementedError() });
+  await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.deepEqual(presence.moves, [["begin", "target-id", "apex", "Apex"]]);
+  assert.equal(presence.announcements.length, 1);
+  assert.equal(presence.announcements[0].eventType, "channel_moved");
+  assert.equal(presence.announcements[0].channelName, "Apex");
+  assert.equal(presence.announcements.some((item) => ["channel_joined", "channel_left"].includes(item.eventType)), false);
+  // 范围与 LiveKit 原路径一致：源频道 + 目标频道 + 被移动者 + 操作者
+  assert.deepEqual(presence.announcements[0].scope, { type: "channels", channelIds: ["cs2", "apex"], includeParticipants: ["target-id", "admin-id"] });
+});
+
+test("目标用户没有在线 Presence 连接时 fallback 返回明确失败并清理移动窗口", async () => {
+  const { service, presence } = makeService({ moveError: twirpNotImplementedError(), voiceControlDelivered: false });
+  const result = await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.equal(result.status, 409);
+  assert.match(result.error, /没有在线连接/);
+  assert.equal(result.success, undefined);
+  assert.deepEqual(presence.moves, [["begin", "target-id", "apex", "Apex"], ["cancel", "target-id"]]);
+  assert.equal(presence.announcements.length, 0);
+});
+
+test("非 not implemented 的 move 错误不触发 fallback，仍按失败处理", async () => {
+  for (const moveError of [
+    Object.assign(new Error("unauthorized"), { status: 401 }),
+    Object.assign(new Error("forbidden"), { status: 403 }),
+    Object.assign(new Error("participant does not exist"), { status: 404 }),
+    new Error("network timeout"),
+  ]) {
+    const { service, presence } = makeService({ moveError });
+    await assert.rejects(
+      () => service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" }),
+      moveError,
+    );
+    assert.equal(presence.voiceControls.length, 0);
+    assert.deepEqual(presence.moves, [["begin", "target-id", "apex", "Apex"], ["cancel", "target-id"]]);
+    assert.equal(presence.announcements.length, 0);
+  }
+});
+
+test("服务器静音成员走 fallback 移动时静音记录迁移到目标频道", async () => {
+  const { service } = makeService({ moveError: twirpNotImplementedError() });
+  await service.mute({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id" });
+  const result = await service.move({ actor: admin, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" });
+  assert.equal(result.serverMuted, true);
+  assert.equal(service.getServerMuteState("target-id").currentRoomName, "apex");
 });

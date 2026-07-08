@@ -75,6 +75,7 @@ async function createFixture(options = {}) {
   const presence = createPresenceService({
     heartbeatMs: options.heartbeatMs ?? 60_000,
     autoHeartbeat: options.autoHeartbeat ?? false,
+    startupQuietMs: options.startupQuietMs ?? 15_000,
     authResolver: options.authResolver ?? cookieIdentity,
     channelLookup: (id) => testDb.db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
   });
@@ -336,6 +337,27 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   await waitForMessage(member, (message) =>
     message.type === "presence:snapshot" &&
     message.members.find((item) => item.nickname === "PLAYER01")?.state === "lobby");
+});
+
+test("fresh=1 query lets a real new login announce through the startup quiet window", async (t) => {
+  const fixture = await createFixture({ startupQuietMs: 60_000 });
+  t.after(fixture.close);
+  const admin = await connect(fixture, "admin");
+  // 未声明 fresh 的连接（重启后的自动重连）：静默窗口内不播欢迎
+  const guest = await connect(fixture, "guest");
+  // 声明 fresh 的真实新登录：其他在线用户能收到 server_joined
+  const memberJoinedPromise = waitForMessage(admin, (message) =>
+    message.type === "announcement" && message.eventType === "server_joined");
+  const member = await connect(fixture, "member", "/ws/presence?fresh=1");
+  const memberSeen = [];
+  member.on("message", (data) => memberSeen.push(JSON.parse(data.toString())));
+  const announcement = await memberJoinedPromise;
+  assert.equal(announcement.actor.displayName, "PLAYER01");
+  // 登录者本人不收自己的欢迎
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(memberSeen.some((message) => message.type === "announcement" && message.eventType === "server_joined"), false);
+  guest.close();
+  member.close();
 });
 
 test("binary and oversized messages are closed by the ws transport", async (t) => {
