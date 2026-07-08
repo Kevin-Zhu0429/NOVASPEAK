@@ -13,6 +13,7 @@ import usePresence from "./hooks/usePresence";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
 import { normalizeUserMessage, sortChannels } from "./utils/channel-settings";
+import { getForceMovePlan } from "./utils/voice-room-events";
 import "./App.css";
 
 
@@ -40,7 +41,13 @@ export default function App() {
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
   const announcements = useVoiceAnnouncements(Boolean(currentUser));
-  const presence = usePresence(currentUser, API_BASE, announcements.handleAnnouncement);
+  // voice_control 处理器依赖 handleMovedToChannel（又依赖 presence），
+  // 用 ref 间接调用打破循环；usePresence 内部同样按 ref 读取最新回调
+  const voiceControlHandlerRef = useRef(null);
+  const handleVoiceControlMessage = useCallback((raw) => {
+    voiceControlHandlerRef.current?.(raw);
+  }, []);
+  const presence = usePresence(currentUser, API_BASE, announcements.handleAnnouncement, handleVoiceControlMessage);
 
   useEffect(() => {
   let cancelled = false;
@@ -197,6 +204,16 @@ export default function App() {
       if (safeMessage) setVoiceNotice(safeMessage);
     }
   }, [channels, presence]);
+
+  // 自建 LiveKit 不支持服务端 moveParticipant 时，后端经 Presence 下发
+  // force_move_channel；这里复用与 RoomEvent.Moved 完全相同的
+  // handleMovedToChannel 切频道路径，不直接操作 room.connect/disconnect
+  useEffect(() => {
+    voiceControlHandlerRef.current = (raw) => {
+      const plan = getForceMovePlan(raw, channels);
+      if (plan) handleMovedToChannel(plan.channelId, plan.notice);
+    };
+  }, [channels, handleMovedToChannel]);
 
   async function logout() {
   try {

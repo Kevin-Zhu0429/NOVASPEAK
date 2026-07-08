@@ -308,8 +308,12 @@ export function createPresenceService(options = {}) {
     scheduleDowngrade(key, principal);
   }
 
-  function announceServerJoined(principal) {
-    if (Date.now() - startedAt < startupQuietMs) return;
+  // startupQuietMs 只用来吸收服务重启后的全员自动重连（避免欢迎风暴）。
+  // 客户端通过 ?fresh=1 声明“本标签页首次上线”（重连/刷新不声明），
+  // 声明 fresh 的真实新登录即使落在静默窗口内也照常播欢迎；
+  // 离线宽限期内的重连在 addConnection 里优先短路，不会走到这里。
+  function announceServerJoined(principal, { claimsFreshLogin = false } = {}) {
+    if (!claimsFreshLogin && Date.now() - startedAt < startupQuietMs) return;
     broadcastAnnouncement({ eventType: "server_joined", actor: announcementActor(principal.profile) });
   }
 
@@ -317,6 +321,23 @@ export function createPresenceService(options = {}) {
     const match = findChannelConnection(identity, sourceChannelId);
     if (!match) return false;
     return sendJson(match.connection, command);
+  }
+
+  // voice_control 控制消息只发给目标用户本人的 Presence 连接（LiveKit identity 自动
+  // 归一化）。优先发给位于源频道的标签页；没有命中时发给该用户的全部标签页，
+  // 由前端自行忽略不相关的控制消息。目标用户完全不在线时返回 false。
+  function sendVoiceControlToParticipant(participantIdentity, sourceChannelId, payload) {
+    const key = principalKeyForParticipantIdentity(participantIdentity);
+    if (!key) return false;
+    const principal = principals.get(key);
+    if (!principal || !principal.connections.size) return false;
+    const connections = [...principal.connections.entries()];
+    const inSourceChannel = connections.filter(([, state]) => state.channelId === sourceChannelId);
+    let delivered = false;
+    for (const [connection] of inSourceChannel.length ? inSourceChannel : connections) {
+      if (sendJson(connection, payload)) delivered = true;
+    }
+    return delivered;
   }
 
   function setConnectionLocation(identity, sourceChannelId, nextState) {
@@ -389,7 +410,7 @@ export function createPresenceService(options = {}) {
       } else {
         // 从 0 连接变为 1 连接才算真正进入服务器；此时新连接尚未注册，
         // 欢迎语只发给其他在线成员，自己不播自己的登录
-        announceServerJoined(principal);
+        announceServerJoined(principal, { claimsFreshLogin: req?.presenceClaimsFreshLogin === true });
       }
     } else {
       principal.profile = profileFor(user);
@@ -441,8 +462,10 @@ export function createPresenceService(options = {}) {
   }
 
   function handleUpgrade(req, socket, head) {
-    const pathname = new URL(req.url, "http://localhost").pathname;
-    if (pathname !== PRESENCE_PATH) return false;
+    const requestUrl = new URL(req.url, "http://localhost");
+    if (requestUrl.pathname !== PRESENCE_PATH) return false;
+    // fresh=1 只影响启动静默窗口内是否播欢迎，不涉及任何权限
+    req.presenceClaimsFreshLogin = requestUrl.searchParams.get("fresh") === "1";
     let user;
     try {
       user = authResolver(req);
@@ -546,6 +569,7 @@ export function createPresenceService(options = {}) {
     runTransportHeartbeatCheck,
     runIdentityRevalidation,
     sendCommandToChannelConnection,
+    sendVoiceControlToParticipant,
     setConnectionLocation,
     broadcastAnnouncement,
     beginParticipantMove,

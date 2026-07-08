@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { TrackSource } from "livekit-server-sdk";
 
+// 只识别自建 LiveKit 未实现 moveParticipant 的 Twirp not implemented 错误；
+// 401/403、participant not found、超时、密钥错误等其他错误一律不触发 fallback。
+export function isMoveNotImplementedError(error) {
+  if (!error) return false;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  if (message.includes("not implemented")) return true;
+  const code = typeof error.code === "string" ? error.code.toLowerCase() : error.code;
+  return code === "unimplemented" || error.status === 501;
+}
+
 export function createVoiceManagementService({ roomService, channelLookup, presenceService = null, randomId = randomUUID, retryDelayMs = 40 } = {}) {
   const serverMuteRecords = new Map();
 
@@ -132,6 +142,7 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     // 在 LiveKit move 之前开启移动抑制窗口：客户端收到 RoomEvent.Moved 后的
     // set-location 回传可能先于服务端后续步骤到达，开窗必须抢在它前面
     presenceService?.beginParticipantMove?.(base.identity, target.id, target.name);
+    let movedViaFallback = false;
     try {
       await roomService.moveParticipant(base.source.id, base.identity, target.id);
       if (state?.serverMuted) {
@@ -140,9 +151,30 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
         if (movedParticipant) await applyServerMutedState(target.id, base.identity, movedParticipant, state);
       }
     } catch (moveError) {
-      // move 失败：清理窗口，恢复正常进出播报，也不发 channel_moved
-      presenceService?.cancelParticipantMove?.(base.identity);
-      throw moveError;
+      if (!isMoveNotImplementedError(moveError)) {
+        // move 失败：清理窗口，恢复正常进出播报，也不发 channel_moved
+        presenceService?.cancelParticipantMove?.(base.identity);
+        throw moveError;
+      }
+      // 自建 LiveKit 不支持服务端 moveParticipant：降级为通过现有 Presence WebSocket
+      // 通知目标用户浏览器自行切换频道；只发给目标用户本人的连接
+      const delivered = presenceService?.sendVoiceControlToParticipant?.(base.identity, base.source.id, {
+        type: "voice_control",
+        action: "force_move_channel",
+        requestId: randomId(),
+        targetChannelId: target.id,
+        targetChannelName: target.name,
+        sourceChannelId: base.source.id,
+        reason: "admin_move",
+      }) === true;
+      if (!delivered) {
+        // 目标用户没有在线 Presence 连接：明确失败，不假装成功
+        presenceService?.cancelParticipantMove?.(base.identity);
+        return { status: 409, error: "目标成员当前没有在线连接，无法移动频道" };
+      }
+      // 目标用户重连目标频道时由 /api/token 的 getTokenServerMute 重新施加静音
+      if (state?.serverMuted) state.currentRoomName = target.id;
+      movedViaFallback = true;
     }
     presenceService?.setConnectionLocation?.(base.identity, base.source.id, { state: "in_channel", channelId: target.id, channelName: target.name });
     presenceService?.sendCommandToChannelConnection?.(base.identity, target.id, { type: "presence:command", command: "moved-to-channel", requestId: randomId(), sourceChannelId: base.source.id, targetChannelId: target.id, targetChannelName: target.name });
@@ -151,7 +183,7 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
       { eventType: "channel_moved", actor: { displayName: displayName(base.participant) }, channelId: target.id, channelName: target.name },
       { type: "channels", channelIds: [base.source.id, target.id], includeParticipants: [base.identity, base.actor.id] },
     );
-    return { success: true, participantName: displayName(base.participant), targetChannelName: target.name, serverMuted: Boolean(state?.serverMuted) };
+    return { success: true, participantName: displayName(base.participant), targetChannelName: target.name, serverMuted: Boolean(state?.serverMuted), movedViaFallback };
   }
 
   function getServerMuteState(identity) { return serverMuteRecords.get(cleanIdentity(identity)) || null; }

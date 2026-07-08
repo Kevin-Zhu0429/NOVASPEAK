@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildPresenceWebSocketUrl, parsePresenceMessage, sortPresenceMembers } from "../utils/presence-display";
+import {
+  buildPresenceWebSocketUrl,
+  clearPresenceConnectedMarker,
+  markPresenceConnected,
+  parsePresenceMessage,
+  shouldClaimFreshPresenceLogin,
+  sortPresenceMembers,
+} from "../utils/presence-display";
 
-export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
+export default function usePresence(currentUser, apiBase = "", onAnnouncement, onVoiceControl) {
   const [members, setMembers] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const socketRef = useRef(null);
@@ -10,8 +17,10 @@ export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
   const activeRef = useRef(false);
   const locationRef = useRef({ state: "lobby", channelId: null });
   const onAnnouncementRef = useRef(onAnnouncement);
+  const onVoiceControlRef = useRef(onVoiceControl);
 
   useEffect(() => { onAnnouncementRef.current = onAnnouncement; }, [onAnnouncement]);
+  useEffect(() => { onVoiceControlRef.current = onVoiceControl; }, [onVoiceControl]);
 
   const setLocation = useCallback((location) => {
     locationRef.current = location;
@@ -27,6 +36,8 @@ export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
       socketRef.current?.close();
       socketRef.current = null;
       clearTimeout(retryRef.current);
+      // 登出后本标签页重新登录算真实新登录，允许再次声明 fresh
+      clearPresenceConnectedMarker();
       queueMicrotask(() => {
         setMembers([]);
         setConnectionStatus("offline");
@@ -39,11 +50,12 @@ export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
       if (!activeRef.current) return;
       const ownGeneration = ++generation;
       setConnectionStatus(attemptRef.current ? "reconnecting" : "connecting");
-      const socket = new WebSocket(buildPresenceWebSocketUrl(apiBase));
+      const socket = new WebSocket(buildPresenceWebSocketUrl(apiBase, window.location, { freshLogin: shouldClaimFreshPresenceLogin() }));
       socketRef.current = socket;
       socket.onopen = () => {
         if (ownGeneration !== generation || socketRef.current !== socket) return socket.close();
         attemptRef.current = 0;
+        markPresenceConnected();
         setConnectionStatus("online");
         socket.send(JSON.stringify({ type: "presence:set-location", ...locationRef.current }));
       };
@@ -54,6 +66,9 @@ export default function usePresence(currentUser, apiBase = "", onAnnouncement) {
           setMembers(sortPresenceMembers(snapshot));
           return;
         }
+        // 同一条 Presence 连接同时承载 announcement 与 voice_control，
+        // 两个处理器各自解析自己认识的消息类型，互不误触发
+        onVoiceControlRef.current?.(event.data);
         onAnnouncementRef.current?.(event.data);
       };
       socket.onclose = (event) => {
