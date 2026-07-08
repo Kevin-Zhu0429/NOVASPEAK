@@ -100,18 +100,34 @@ app.use("/uploads", (error, req, res, next) => {
   res.status(status).json({ error: "头像文件不存在" });
 });
 
-function getLiveKitHttpUrl() {
-  const url = process.env.LIVEKIT_URL;
+function getLiveKitAdminUrl() {
+  const explicitAdminUrl = process.env.LIVEKIT_ADMIN_URL?.trim();
+  const liveKitUrl = process.env.LIVEKIT_URL?.trim();
 
-  if (!url) {
+  if (explicitAdminUrl) {
+    return explicitAdminUrl;
+  }
+
+  if (!liveKitUrl) {
     throw new Error("LIVEKIT_URL is missing");
   }
 
-  return url.replace("wss://", "https://").replace("ws://", "http://");
+  return liveKitUrl
+    .replace(/^wss:\/\//i, "https://")
+    .replace(/^ws:\/\//i, "http://");
+}
+
+function toSafeLiveKitError(error) {
+  return {
+    name: error?.name,
+    message: error?.message,
+    code: error?.code,
+    status: error?.status,
+  };
 }
 
 const roomService = new RoomServiceClient(
-  getLiveKitHttpUrl(),
+  getLiveKitAdminUrl(),
   process.env.LIVEKIT_API_KEY,
   process.env.LIVEKIT_API_SECRET
 );
@@ -1516,7 +1532,7 @@ app.post("/api/voice/participants/mute", requireAuthenticated, async (req, res) 
     const result = await voiceManagement.mute({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
     return sendVoiceManagementResult(res, result, (value) => value.idempotent ? `“${value.participantName}”已处于服务器静音状态` : `已服务器静音“${value.participantName}”`);
   } catch (error) {
-    console.error("Voice mute error:", error?.message || error);
+    console.error("Voice mute error:", toSafeLiveKitError(error));
     return res.status(502).json({ error: "服务器静音失败" });
   }
 });
@@ -1526,7 +1542,7 @@ app.post("/api/voice/participants/unmute", requireAuthenticated, async (req, res
     const result = await voiceManagement.unmute({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
     return sendVoiceManagementResult(res, result, (value) => value.idempotent ? `“${value.participantName}”未处于服务器静音状态` : `已解除“${value.participantName}”的服务器静音`);
   } catch (error) {
-    console.error("Voice unmute error:", error?.message || error);
+    console.error("Voice unmute error:", toSafeLiveKitError(error));
     return res.status(502).json({ error: "解除服务器静音失败" });
   }
 });
@@ -1536,7 +1552,7 @@ app.post("/api/voice/participants/remove", requireAuthenticated, async (req, res
     const result = await voiceManagement.remove({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity });
     return sendVoiceManagementResult(res, result, (value) => `已将“${value.participantName}”移出频道`);
   } catch (error) {
-    console.error("Voice remove error:", error?.message || error);
+    console.error("Voice remove error:", toSafeLiveKitError(error));
     return res.status(502).json({ error: "移出频道失败" });
   }
 });
@@ -1546,7 +1562,7 @@ app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) 
     const result = await voiceManagement.move({ actor: req.authUser, sourceChannelId: req.body?.sourceChannelId, participantIdentity: req.body?.participantIdentity, targetChannelId: req.body?.targetChannelId });
     return sendVoiceManagementResult(res, result, (value) => `已将“${value.participantName}”移动到“${value.targetChannelName}”`);
   } catch (error) {
-    console.error("Voice move error:", error?.message || error);
+    console.error("Voice move error:", toSafeLiveKitError(error));
     return res.status(502).json({ error: "移动频道失败" });
   }
 });
