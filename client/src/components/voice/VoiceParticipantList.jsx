@@ -18,6 +18,7 @@ export default function VoiceParticipantList({ participants, participantLoss, on
               key={item.id}
               item={item}
               receiveLoss={participantLoss[item.id]}
+              onlineMembers={onlineMembers}
               currentUser={currentUser}
               currentChannel={currentChannel}
               channels={channels}

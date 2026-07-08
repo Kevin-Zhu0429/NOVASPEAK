@@ -2366,3 +2366,147 @@ input {
     flex-direction: column;
   }
 }
+
+/* ---------- 4B：成员头像 ---------- */
+
+.user-avatar {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  overflow: hidden;
+  border: 1px solid rgba(94, 234, 212, 0.2);
+  border-radius: 50%;
+  color: #ccfbf1;
+  background: linear-gradient(145deg, #115e59, #164e63);
+  font-weight: 700;
+}
+
+.user-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-avatar-initial {
+  font-size: 15px;
+  line-height: 1;
+  user-select: none;
+}
+
+.user-avatar-sm {
+  width: 28px;
+  height: 28px;
+}
+
+.user-avatar-sm .user-avatar-initial {
+  font-size: 12px;
+}
+
+.user-avatar-lg {
+  width: 54px;
+  height: 54px;
+}
+
+.user-avatar-lg .user-avatar-initial {
+  font-size: 21px;
+}
+
+.user-avatar-speaking {
+  border-color: rgba(45, 212, 191, 0.85);
+  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.35);
+}
+
+.user-avatar-online {
+  border-color: rgba(94, 234, 212, 0.45);
+}
+
+.user-avatar-offline {
+  opacity: 0.72;
+  filter: grayscale(0.4);
+}
+
+.account-profile-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-avatar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.account-avatar-actions .avatar-action-button {
+  min-height: 32px;
+  padding: 5px 13px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  font-size: 12px;
+}
+
+.account-avatar-actions .avatar-action-button:hover:not(:disabled) {
+  border-color: rgba(45, 212, 191, 0.55);
+  color: #ccfbf1;
+}
+
+.account-avatar-actions .avatar-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.account-avatar-actions .avatar-action-button.danger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fda4af;
+}
+
+.account-avatar-actions .avatar-action-button.danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: #fecaca;
+}
+
+.avatar-delete-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #fda4af;
+  font-size: 12px;
+}
+
+.avatar-upload-input {
+  display: none;
+}
+
+.account-avatar-message {
+  margin-top: 8px;
+}
+
+.account-avatar-message .account-message {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .account-profile-card {
+    align-items: flex-start;
+  }
+
+  .account-avatar-actions .avatar-action-button {
+    min-height: 36px;
+  }
+}
+
+.member-profile-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}

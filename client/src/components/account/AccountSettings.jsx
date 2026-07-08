@@ -1,5 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getPositionText } from "../../utils/user-display";
+import { getAvatarUploadUiModel } from "../../utils/avatar";
+import {
+  AVATAR_ALLOWED_MIME_TYPES,
+  deleteMyAvatar,
+  uploadMyAvatar,
+} from "../../utils/avatar-api";
+import UserAvatar from "../common/UserAvatar";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -73,6 +80,13 @@ export default function AccountSettings({
     success: "",
   });
   const [loadError, setLoadError] = useState("");
+  const [avatarStatus, setAvatarStatus] = useState({
+    submitting: false,
+    error: "",
+    success: "",
+  });
+  const [confirmingAvatarDelete, setConfirmingAvatarDelete] = useState(false);
+  const avatarInputRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,6 +125,45 @@ export default function AccountSettings({
     setAccountUser(user);
     setSelectedPositions(user.positions || []);
     onUserUpdated(user);
+  }
+
+  async function handleAvatarFileChange(event) {
+    const file = event.target.files?.[0];
+    // 允许重新选择同一个文件
+    event.target.value = "";
+    if (!file) return;
+
+    setConfirmingAvatarDelete(false);
+    setAvatarStatus({ submitting: true, error: "", success: "" });
+    try {
+      const user = await uploadMyAvatar(API_BASE, file);
+      applyUpdatedUser(user);
+      setAvatarStatus({ submitting: false, error: "", success: "头像上传成功" });
+    } catch (error) {
+      console.error("Upload avatar error:", error?.message);
+      setAvatarStatus({
+        submitting: false,
+        error: error.message || "头像上传失败，请稍后重试",
+        success: "",
+      });
+    }
+  }
+
+  async function handleAvatarDelete() {
+    setAvatarStatus({ submitting: true, error: "", success: "" });
+    try {
+      const user = await deleteMyAvatar(API_BASE);
+      applyUpdatedUser(user);
+      setConfirmingAvatarDelete(false);
+      setAvatarStatus({ submitting: false, error: "", success: "头像已删除" });
+    } catch (error) {
+      console.error("Delete avatar error:", error?.message);
+      setAvatarStatus({
+        submitting: false,
+        error: error.message || "头像删除失败，请稍后重试",
+        success: "",
+      });
+    }
   }
 
   async function updateNickname(event) {
@@ -238,6 +291,11 @@ export default function AccountSettings({
   const roleName =
     accountUser?.role === "admin" ? "管理员" : "战队成员";
   const positionSummary = getPositionText(accountUser);
+  const avatarUi = getAvatarUploadUiModel({
+    role: accountUser?.role,
+    avatarUrl: accountUser?.avatarUrl,
+    uploading: avatarStatus.submitting,
+  });
 
   return (
     <div className="account-settings-overlay" role="dialog" aria-modal="true">
@@ -265,13 +323,69 @@ export default function AccountSettings({
         ) : (
           <div className="account-settings-content">
             <section className="account-profile-card">
-              <div className="account-profile-avatar">
-                {(accountUser?.displayName || "?").slice(0, 1).toUpperCase()}
-              </div>
-              <div>
+              <UserAvatar
+                avatarUrl={accountUser?.avatarUrl}
+                displayName={accountUser?.displayName}
+                size="lg"
+              />
+              <div className="account-profile-main">
                 <strong>{accountUser?.displayName}</strong>
                 <span>{roleName}</span>
                 <p>{positionSummary}</p>
+                {avatarUi.showUploadEntry && (
+                  <div className="account-avatar-actions">
+                    <input
+                      ref={avatarInputRef}
+                      className="avatar-upload-input"
+                      type="file"
+                      accept={AVATAR_ALLOWED_MIME_TYPES.join(",")}
+                      onChange={handleAvatarFileChange}
+                      disabled={avatarUi.actionsDisabled}
+                    />
+                    <button
+                      type="button"
+                      className="avatar-action-button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarUi.actionsDisabled}
+                    >
+                      {avatarStatus.submitting ? "正在处理..." : "更换头像"}
+                    </button>
+                    {avatarUi.showDeleteEntry && !confirmingAvatarDelete && (
+                      <button
+                        type="button"
+                        className="avatar-action-button danger"
+                        onClick={() => setConfirmingAvatarDelete(true)}
+                        disabled={avatarUi.actionsDisabled}
+                      >
+                        删除头像
+                      </button>
+                    )}
+                    {avatarUi.showDeleteEntry && confirmingAvatarDelete && (
+                      <span className="avatar-delete-confirm">
+                        确定删除头像？
+                        <button
+                          type="button"
+                          className="avatar-action-button danger"
+                          onClick={handleAvatarDelete}
+                          disabled={avatarUi.actionsDisabled}
+                        >
+                          确认删除
+                        </button>
+                        <button
+                          type="button"
+                          className="avatar-action-button"
+                          onClick={() => setConfirmingAvatarDelete(false)}
+                          disabled={avatarUi.actionsDisabled}
+                        >
+                          取消
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="account-avatar-message">
+                  <AccountMessage status={avatarStatus} />
+                </div>
               </div>
             </section>
 

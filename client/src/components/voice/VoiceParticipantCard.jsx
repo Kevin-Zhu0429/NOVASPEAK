@@ -4,16 +4,20 @@ import { formatLoss, qualityLabel } from "../../utils/voice-network";
 import { getMemberStatusBadges } from "../../utils/voice-member-menu";
 import { getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
 import { createLongPressTracker, shouldIgnoreLongPressTarget } from "../../utils/long-press";
+import { resolveParticipantAvatarUrl } from "../../utils/avatar";
 import VoiceMemberContextMenu from "./VoiceMemberContextMenu";
 import MemberProfileDialog from "./MemberProfileDialog";
+import UserAvatar from "../common/UserAvatar";
 
-function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
+function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const buttonRef = useRef(null);
   const memberKey = getMemberAudioKey(item);
   const localPref = getMemberAudioPref(localAudioPrefs, memberKey);
   const statusBadges = getMemberStatusBadges({ serverMuted: item.serverMuted, localMuted: !item.isLocal && localPref.muted });
+  // LiveKit metadata 不含头像：本人用 currentUser，其余成员用 Presence 在线数据
+  const avatarUrl = resolveParticipantAvatarUrl({ isLocal: item.isLocal, displayName: item.displayName, currentUser, onlineMembers });
 
   // 手机端补充入口：长按卡片 550ms 打开菜单（不影响滚动和按钮点击）
   const [longPress] = useState(() => createLongPressTracker({ onLongPress: (point) => setContextMenu({ x: point.x, y: point.y }) }));
@@ -58,7 +62,7 @@ function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, 
       onTouchEnd={() => longPress.cancel()}
       onTouchCancel={() => longPress.cancel()}
     >
-      <div className="voice-avatar">{item.displayName.slice(0, 1).toUpperCase()}</div>
+      <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="md" status={item.isSpeaking ? "speaking" : ""} />
       <div className="voice-participant-copy">
         <strong>{item.displayName}{item.isLocal ? "（我）" : ""}</strong>
         <span>{item.positionText}</span>
@@ -101,6 +105,7 @@ function VoiceParticipantCard({ item, receiveLoss, currentUser, currentChannel, 
       {profileOpen && (
         <MemberProfileDialog
           item={item}
+          avatarUrl={avatarUrl}
           memberKey={memberKey}
           channelName={currentChannel?.name}
           localPref={localPref}
