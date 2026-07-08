@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { migrateChannels } from "./channels.js";
+import { migrateAvatarColumn } from "./avatar.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -159,6 +160,9 @@ db.prepare(`
     OR TRIM(display_name) = ''
 `).run();
 
+
+// 兼容旧数据库：增加头像相对路径字段，旧用户默认 NULL
+migrateAvatarColumn(db);
 
 migrateChannels(db);
 

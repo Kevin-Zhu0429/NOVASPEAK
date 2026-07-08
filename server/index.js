@@ -31,6 +31,10 @@ import {
 import { createPresenceService } from "./presence.js";
 import { createVoiceManagementService } from "./voice-management.js";
 import {
+  AVATAR_UPLOAD_BODY_LIMIT,
+  createAvatarService,
+} from "./avatar.js";
+import {
   assertChannelCapacity,
   buildChannelPatch,
   canEnterChannel,
@@ -52,14 +56,49 @@ const clientDistPath = path.resolve(
   "../client/dist"
 );
 
+// 头像上传目录；测试环境通过 NOVASPEAK_UPLOADS_DIR 指向临时目录
+const uploadsDirectory = process.env.NOVASPEAK_UPLOADS_DIR
+  ? path.resolve(process.env.NOVASPEAK_UPLOADS_DIR)
+  : path.join(__dirname, "uploads");
+
+const avatarsDirectory = path.join(uploadsDirectory, "avatars");
+
 const app = express();
 
 // Cloudflare Tunnel 通过本机回环地址连接 Express
 app.set("trust proxy", "loopback");
 
 app.use(cors());
+
+// 头像上传使用 JSON base64，需要比默认 100kb 更大的请求体上限
+app.use("/api/me/avatar", express.json({ limit: AVATAR_UPLOAD_BODY_LIMIT }));
+
 app.use(express.json());
 app.use(cookieParser());
+
+// 只暴露 server/uploads/avatars 一个目录，不暴露整个 server 目录；
+// fallthrough: false 让缺失的头像直接进入下方 JSON 404，而不是落入 SPA 页面
+app.use(
+  "/uploads/avatars",
+  express.static(avatarsDirectory, {
+    fallthrough: false,
+    index: false,
+    dotfiles: "ignore",
+    maxAge: "1d",
+  })
+);
+
+app.use("/uploads", (req, res) => {
+  res.status(404).json({ error: "文件不存在" });
+});
+
+app.use("/uploads", (error, req, res, next) => {
+  const status =
+    Number.isInteger(error?.status) && error.status >= 400 && error.status < 600
+      ? error.status
+      : 404;
+  res.status(status).json({ error: "头像文件不存在" });
+});
 
 function getLiveKitHttpUrl() {
   const url = process.env.LIVEKIT_URL;
@@ -78,6 +117,11 @@ const roomService = new RoomServiceClient(
 );
 
 const presence = createPresenceService();
+
+const avatarService = createAvatarService({
+  db,
+  avatarsDirectory,
+});
 
 const voiceManagement = createVoiceManagementService({
   roomService,
@@ -170,6 +214,7 @@ function getAccountUser(userId) {
       display_name,
       password_hash,
       role,
+      avatar_path,
       created_at
     FROM users
     WHERE id = ?
@@ -261,7 +306,8 @@ app.post("/api/auth/member-login",
           username_key,
           display_name,
           password_hash,
-          role
+          role,
+          avatar_path
         FROM users
         WHERE username_key = ?
       `).get(nicknameKey);
@@ -671,6 +717,73 @@ app.put("/api/account/me/positions",
   }
 );
 
+app.post("/api/me/avatar",
+  requireRegistered,
+  (req, res) => {
+    try {
+      const result = avatarService.saveAvatarForUser(
+        req.authUser.id,
+        req.body
+      );
+
+      if (result.error) {
+        return res.status(result.status || 400).json({
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        user: toPublicUser(getAccountUser(req.authUser.id)),
+      });
+    } catch (error) {
+      console.error("Upload avatar error:", error?.message || error);
+      res.status(500).json({
+        error: "上传头像失败，请稍后重试",
+      });
+    }
+  }
+);
+
+app.delete("/api/me/avatar",
+  requireRegistered,
+  (req, res) => {
+    try {
+      const result = avatarService.deleteAvatarForUser(req.authUser.id);
+
+      if (result.error) {
+        return res.status(result.status || 400).json({
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        user: toPublicUser(getAccountUser(req.authUser.id)),
+      });
+    } catch (error) {
+      console.error("Delete avatar error:", error?.message || error);
+      res.status(500).json({
+        error: "删除头像失败，请稍后重试",
+      });
+    }
+  }
+);
+
+// 头像请求体解析错误（过大 / 非法 JSON）统一返回中文 JSON
+app.use("/api/me/avatar", (error, req, res, next) => {
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({
+      error: "头像文件不能超过 2MB",
+    });
+  }
+
+  console.error("Avatar request body error:", error?.type || error?.message);
+  res.status(400).json({
+    error: "头像上传数据格式不正确",
+  });
+});
+
 app.get("/api/channels", requireAuthenticated, (req, res) => {
   console.info("[channel-list] request-start");
   try {
@@ -884,7 +997,8 @@ app.get("/api/team/public-members",
           id,
           username,
           COALESCE(display_name, username) AS display_name,
-          role
+          role,
+          avatar_path
         FROM users
         ORDER BY
           CASE
@@ -905,6 +1019,7 @@ app.get("/api/team/public-members",
             role: publicUser.role,
             positions: publicUser.positions,
             positionNames: publicUser.positionNames,
+            avatarUrl: publicUser.avatarUrl,
             position: publicUser.position,
             positionName: publicUser.positionName,
           };
@@ -933,6 +1048,7 @@ app.get("/api/team/members",
           username,
           display_name,
           role,
+          avatar_path,
           created_at
         FROM users
         ORDER BY
@@ -1470,3 +1586,6 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
 });
+
+// 供后端测试直接访问真实路由（生产行为不变）
+export { app, server };
