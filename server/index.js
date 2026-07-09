@@ -800,12 +800,18 @@ app.use("/api/me/avatar", (error, req, res, next) => {
   });
 });
 
+function debugChannelList(...args) {
+  if (process.env.DEBUG_CHANNEL_LIST === "true") {
+    console.info(...args);
+  }
+}
+
 app.get("/api/channels", requireAuthenticated, (req, res) => {
-  console.info("[channel-list] request-start");
+  debugChannelList("[channel-list] request-start");
   try {
     const channels = listChannelRows(db).map(toPublicChannel);
-    console.info("[channel-list] db-query-success");
-    console.info("[channel-list] response-success");
+    debugChannelList("[channel-list] db-query-success");
+    debugChannelList("[channel-list] response-success");
     res.json(channels);
   } catch (error) {
     console.error("[channel-list] failed", {
