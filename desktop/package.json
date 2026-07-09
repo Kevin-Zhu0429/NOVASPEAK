@@ -1,0 +1,14 @@
+{
+  "name": "novaspeak-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NovaSpeak 桌面客户端(Electron 壳,第一阶段 5A)",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^43.1.0"
+  }
+}
