@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NovaSpeak",
+  "version": "0.1.0",
+  "identifier": "top.novagaming.novaspeak",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "http://localhost:5173"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": []
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"]
+  }
+}

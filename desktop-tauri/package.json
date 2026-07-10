@@ -1,0 +1,14 @@
+{
+  "name": "novaspeak-desktop-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NovaSpeak 桌面客户端(Tauri 壳,对照 Electron 5A)",
+  "scripts": {
+    "dev": "tauri dev",
+    "start": "tauri dev",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

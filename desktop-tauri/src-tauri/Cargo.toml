@@ -1,0 +1,19 @@
+# NovaSpeak 桌面壳(Tauri)。webview2-com / windows 版本必须与 tauri 内部 wry 使用的一致,
+# 否则 with_webview 返回的 WebView2 COM 类型会对不上;当前对应 tauri 2.11.x。
+[package]
+name = "novaspeak-desktop-tauri"
+version = "0.1.0"
+description = "NovaSpeak 桌面客户端(Tauri 壳,对照 Electron 5A)"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = [] }
+tauri-plugin-opener = "2"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows = "0.61"
