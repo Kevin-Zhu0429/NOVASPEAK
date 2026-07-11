@@ -1998,6 +1998,11 @@ input {
 .audio-device-panel label { display: grid; gap: 7px; color: #ccfbf1; font-size: 12px; }
 .audio-device-panel select { width: 100%; padding: 10px; border: 1px solid #334155; border-radius: 9px; color: white; background: #0f172a; }
 .device-unsupported, .device-error { color: #fbbf24; font-size: 12px; }
+.audio-device-panel .mic-constraints { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(94, 234, 212, .16); }
+.audio-device-panel .mic-constraints-title { color: #ccfbf1; font-size: 12px; }
+.audio-device-panel .mic-constraint-row { display: flex; flex-direction: row; align-items: center; gap: 8px; width: fit-content; }
+.audio-device-panel .mic-constraint-row input[type="checkbox"] { width: auto; }
+.audio-device-panel .mic-constraints-hint { color: #94a3b8; font-size: 11px; line-height: 1.5; }
 .voice-remote-audio { display: none; }
 .network-stats { flex: 0 1 360px; min-width: min(360px, 100%); max-width: 100%; }
 .network-stats-desktop { display: block; }
