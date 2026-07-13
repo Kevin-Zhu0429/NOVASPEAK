@@ -6,3 +6,5 @@ server/data/
 client/dist/
 server/uploads/*
 !server/uploads/.gitkeep
+desktop/renderer/
+desktop/release/

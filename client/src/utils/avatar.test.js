@@ -5,6 +5,7 @@ import {
   getAvatarInitial,
   getAvatarUploadUiModel,
   normalizeAvatarUrl,
+  resolveAvatarImageSrc,
   resolveParticipantAvatarUrl,
   shouldShowAvatarImage,
 } from "./avatar.js";
@@ -61,6 +62,53 @@ test("normalizeAvatarUrl 拒绝危险路径", () => {
   assert.equal(normalizeAvatarUrl("http://evil.example/x.png"), null);
   assert.equal(normalizeAvatarUrl("/uploads/av atars/x.png"), null);
   assert.equal(normalizeAvatarUrl("/uploads\\avatars\\x.png"), null);
+});
+
+test("resolveAvatarImageSrc：apiBase 为空时保持站内相对路径", () => {
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", ""),
+    "/uploads/avatars/abc.png"
+  );
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png"),
+    "/uploads/avatars/abc.png"
+  );
+});
+
+test("resolveAvatarImageSrc：apiBase 为 http(s) 基址时拼绝对地址", () => {
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", "https://app.novagaming.top"),
+    "https://app.novagaming.top/uploads/avatars/abc.png"
+  );
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", "https://app.novagaming.top/"),
+    "https://app.novagaming.top/uploads/avatars/abc.png"
+  );
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", "http://localhost:3001"),
+    "http://localhost:3001/uploads/avatars/abc.png"
+  );
+});
+
+test("resolveAvatarImageSrc：非法头像仍被安全过滤为 null", () => {
+  assert.equal(resolveAvatarImageSrc("javascript:alert(1)", "https://app.novagaming.top"), null);
+  assert.equal(resolveAvatarImageSrc("//evil.example/x.png", "https://app.novagaming.top"), null);
+  assert.equal(resolveAvatarImageSrc(null, "https://app.novagaming.top"), null);
+});
+
+test("resolveAvatarImageSrc：非 http(s) 或非字符串 apiBase 回退到相对路径", () => {
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", "javascript:alert(1)//"),
+    "/uploads/avatars/abc.png"
+  );
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", "file:///C:/x"),
+    "/uploads/avatars/abc.png"
+  );
+  assert.equal(
+    resolveAvatarImageSrc("/uploads/avatars/abc.png", 42),
+    "/uploads/avatars/abc.png"
+  );
 });
 
 test("图片加载失败后可标记 fallback（同一 URL 不再当作可展示）", () => {

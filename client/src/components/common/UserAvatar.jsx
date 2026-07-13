@@ -1,5 +1,8 @@
 import { memo, useState } from "react";
-import { getAvatarInitial, normalizeAvatarUrl } from "../../utils/avatar";
+import { getAvatarInitial, resolveAvatarImageSrc } from "../../utils/avatar";
+
+// 与全站 fetch 相同的后端基址约定：Web 部署为空串（同源），桌面打包指向线上后端。
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 /**
  * 通用头像：有 avatarUrl 显示图片，加载失败或为空时回退到昵称首字母。
@@ -12,7 +15,7 @@ function UserAvatar({
   status = "",
   className = "",
 }) {
-  const safeUrl = normalizeAvatarUrl(avatarUrl);
+  const safeUrl = resolveAvatarImageSrc(avatarUrl, API_BASE);
   const [failedUrl, setFailedUrl] = useState("");
   const showImage = Boolean(safeUrl) && safeUrl !== failedUrl;
   const classes = [

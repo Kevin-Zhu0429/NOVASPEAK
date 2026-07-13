@@ -31,6 +31,23 @@ export function shouldShowAvatarImage(avatarUrl) {
 }
 
 /**
+ * 生成 <img src> 用的最终头像地址：
+ * Web 部署（同源 / dev proxy）下 apiBase 为空串，保持 /uploads/... 相对路径；
+ * 桌面打包（file:// 加载、VITE_API_BASE 指向线上后端）下拼成绝对地址。
+ * 仍以 normalizeAvatarUrl 作为唯一安全过滤，非法头像返回 null；
+ * apiBase 只接受 http(s) 绝对基址，其他值一律回退到站内相对路径。
+ */
+export function resolveAvatarImageSrc(avatarUrl, apiBase = "") {
+  const safePath = normalizeAvatarUrl(avatarUrl);
+  if (!safePath) return null;
+  if (typeof apiBase !== "string") return safePath;
+  const trimmedBase = apiBase.trim();
+  if (!trimmedBase) return safePath;
+  if (!/^https?:\/\//i.test(trimmedBase)) return safePath;
+  return `${trimmedBase.replace(/\/+$/, "")}${safePath}`;
+}
+
+/**
  * 在 Presence 在线成员里按昵称找头像（Presence 公共数据不含用户 ID）。
  */
 export function findAvatarUrlByDisplayName(members, displayName) {
