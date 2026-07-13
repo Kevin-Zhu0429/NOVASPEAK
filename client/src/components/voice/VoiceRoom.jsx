@@ -7,8 +7,10 @@ import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
+import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
 import { getAudioElementPatch, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
+import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
@@ -144,6 +146,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   }, []);
 
   const { prefs: localAudioPrefs, setMemberVolume, setMemberLocalMuted } = useLocalAudioPreferences();
+  const { constraints: micConstraints, toggleConstraint: toggleMicConstraint, applyError: micConstraintError } = useMicrophoneConstraints(room);
   const localAudioPrefsRef = useRef(localAudioPrefs);
 
   // 将 Deafen + 本地偏好应用到所有已存在的远端音频元素：
@@ -168,7 +171,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     let disposed = false;
     movedRef.current = false;
     disconnectReasonRef.current = "connect-attempt-created";
-    const activeRoom = new Room({ adaptiveStream: true, dynacast: true });
+    const activeRoom = new Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: getAudioCaptureDefaults(loadMicConstraints()) });
     roomRef.current = activeRoom;
     voiceLifecycleDebug("connect-attempt-created", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
     queueMicrotask(() => {
@@ -456,7 +459,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         </section>
         <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
-      {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} />}
+      {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} micConstraints={micConstraints} onToggleMicConstraint={toggleMicConstraint} micConstraintError={micConstraintError} />}
       <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={() => onLeave?.()} />
     </div>
   );
