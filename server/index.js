@@ -45,6 +45,8 @@ import {
   reorderChannels,
   toPublicChannel,
 } from "./channels.js";
+import { createNeteaseClient } from "./music/netease-client.js";
+import { createNeteaseMusicRouter } from "./music/routes.js";
 
 dotenv.config();
 
@@ -1572,6 +1574,16 @@ app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) 
     return res.status(502).json({ error: "移动频道失败" });
   }
 });
+
+// 网易云音乐机器人：账号绑定接口（必须注册在 /api 404 fallback 之前）
+app.use(
+  "/api/music/netease",
+  createNeteaseMusicRouter({
+    db,
+    neteaseClient: createNeteaseClient(),
+    requireAuthenticated,
+  })
+);
 
 app.use("/api", (req, res) => {
   res.status(404).json({

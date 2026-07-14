@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { migrateChannels } from "./channels.js";
 import { migrateAvatarColumn } from "./avatar.js";
+import { migrateNeteaseAccounts } from "./music/migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -165,6 +166,9 @@ db.prepare(`
 migrateAvatarColumn(db);
 
 migrateChannels(db);
+
+// 网易云音乐机器人：账号绑定凭据表
+migrateNeteaseAccounts(db);
 
 console.log(`SQLite database ready: ${databasePath}`);
 
