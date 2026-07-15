@@ -19,22 +19,35 @@ export class MusicConfigError extends Error {
   }
 }
 
+// 32 字节密钥的规范标准 base64：恰好 44 字符、标准字符集、以单个 = 结尾。
+// 不接受 URL-safe 变体、内部空白、追加字符或非规范 padding。
+const CANONICAL_KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
+
 /**
- * 严格读取加密密钥：必须是 base64 且解码后正好 32 字节，否则视为未配置。
+ * 严格读取加密密钥：必须是 randomBytes(32).toString("base64") 生成的
+ * 规范标准 base64（允许最外层空白，内部不允许），解码后正好 32 字节，
+ * 且重新编码必须与输入完全一致，否则视为未配置。
  * 绝不提供硬编码默认密钥。
  */
 export function readMusicCredentialKey(env = process.env) {
   const raw = env?.[KEY_ENV_NAME];
-  if (typeof raw !== "string" || !raw.trim()) return null;
+  if (typeof raw !== "string") return null;
+
+  const trimmed = raw.trim();
+  if (!CANONICAL_KEY_PATTERN.test(trimmed)) return null;
 
   let key;
   try {
-    key = Buffer.from(raw.trim(), "base64");
+    key = Buffer.from(trimmed, "base64");
   } catch {
     return null;
   }
 
+  // 解码长度 + 规范往返校验：Node 的 base64 解码会静默忽略非法输入，
+  // 只有 re-encode 结果与输入一致才能确认没有被忽略的字符或非规范 bit
   if (key.length !== KEY_BYTE_LENGTH) return null;
+  if (key.toString("base64") !== trimmed) return null;
+
   return key;
 }
 

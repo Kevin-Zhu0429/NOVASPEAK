@@ -1499,6 +1499,9 @@ app.delete("/api/admin/members/:memberId",
           DELETE FROM user_positions WHERE user_id = ?
         `).run(member.id);
         db.prepare(`
+          DELETE FROM netease_accounts WHERE principal_key = ?
+        `).run(member.id);
+        db.prepare(`
           DELETE FROM users WHERE id = ?
         `).run(member.id);
       });

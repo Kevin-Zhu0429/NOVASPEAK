@@ -60,14 +60,17 @@ const insertUser = importedDb.prepare(`
 `);
 insertUser.run("music-member-a", "MUSICA", "musica", "MUSICA", "test-hash", "member", "member", now);
 insertUser.run("music-member-b", "MUSICB", "musicb", "MUSICB", "test-hash", "member", "member", now);
+insertUser.run("music-admin", "MUSICADMIN", "musicadmin", "MUSICADMIN", "test-hash", "admin", "captain", now);
 const insertSession = importedDb.prepare(
   "INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
 );
 insertSession.run(hashSessionToken("music-a-token"), "music-member-a", now + 3_600_000, now);
 insertSession.run(hashSessionToken("music-b-token"), "music-member-b", now + 3_600_000, now);
+insertSession.run(hashSessionToken("music-admin-token"), "music-admin", now + 3_600_000, now);
 
 const memberACookie = "novaspeak_session=music-a-token";
 const memberBCookie = "novaspeak_session=music-b-token";
+const adminCookie = "novaspeak_session=music-admin-token";
 
 function makeGuestCookie(nickname) {
   let cookie = "";
@@ -329,6 +332,67 @@ test("过期的访客凭据会被自动清理", () => {
 
   // 清理函数可重复安全调用
   assert.equal(typeof cleanupExpiredNeteaseAccounts(importedDb), "number");
+});
+
+test("删除正式成员时其网易云凭据在同一事务中一并删除", async () => {
+  const nowTs = Date.now();
+  insertUser.run("doomed-member", "DOOMED", "doomed", "DOOMED", "test-hash", "member", "member", nowTs);
+  insertSession.run(hashSessionToken("doomed-token"), "doomed-member", nowTs + 3_600_000, nowTs);
+  importedDb
+    .prepare("INSERT INTO user_positions (user_id, position) VALUES (?, ?)")
+    .run("doomed-member", "member");
+  insertUser.run("keep-member", "KEEP", "keep", "KEEP", "test-hash", "member", "member", nowTs);
+
+  seedBinding("doomed-member", {
+    musicU: "doomed-secret",
+    nickname: "将被删除的绑定",
+  });
+  seedBinding("keep-member", {
+    musicU: "keep-secret",
+    nickname: "保留的绑定",
+  });
+  const guestKeepKey = "guest:cascade-keep";
+  seedBinding(guestKeepKey, {
+    musicU: "guest-keep-secret",
+    nickname: "访客保留绑定",
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+
+  const result = await api("DELETE", "/api/admin/members/doomed-member", {
+    cookie: adminCookie,
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.json.success, true);
+
+  const countIn = (table, column, value) =>
+    importedDb
+      .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`)
+      .get(value).count;
+
+  // 用户、session、职位、网易云凭据全部删除
+  assert.equal(countIn("users", "id", "doomed-member"), 0);
+  assert.equal(countIn("sessions", "user_id", "doomed-member"), 0);
+  assert.equal(countIn("user_positions", "user_id", "doomed-member"), 0);
+  assert.equal(
+    countIn("netease_accounts", "principal_key", "doomed-member"),
+    0
+  );
+
+  // 其他正式成员和访客的绑定不受影响
+  assert.equal(countIn("netease_accounts", "principal_key", "keep-member"), 1);
+  assert.equal(
+    countIn("netease_accounts", "principal_key", guestKeepKey),
+    1
+  );
+
+  // 没有绑定的成员删除同样幂等成功
+  insertUser.run("unbound-member", "UNBOUND", "unbound", "UNBOUND", "test-hash", "member", "member", nowTs);
+  const unboundResult = await api(
+    "DELETE",
+    "/api/admin/members/unbound-member",
+    { cookie: adminCookie }
+  );
+  assert.equal(unboundResult.status, 200);
 });
 
 test("数据库迁移可重复执行且不破坏数据", () => {

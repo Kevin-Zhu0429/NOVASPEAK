@@ -40,6 +40,71 @@ test("错误长度或非法密钥被拒绝", () => {
   }
 });
 
+test("严格 base64 校验：外层空白允许，其余非规范输入全部拒绝", () => {
+  const validKey = crypto.randomBytes(32).toString("base64");
+  assert.equal(validKey.length, 44);
+
+  // 正确密钥通过，最外层空白先 trim
+  assert.ok(readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: validKey }));
+  assert.ok(
+    readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: `  ${validKey}\n` })
+  );
+
+  const rejected = [
+    // 有效密钥后追加垃圾字符
+    `${validKey}!`,
+    `${validKey}garbage`,
+    `${validKey}AA==`,
+    // 中间插入空格 / 换行 / 制表符
+    `${validKey.slice(0, 20)} ${validKey.slice(20)}`,
+    `${validKey.slice(0, 20)}\n${validKey.slice(20)}`,
+    `${validKey.slice(0, 20)}\t${validKey.slice(20)}`,
+    // 非法 padding：去掉、加倍或前移 =
+    validKey.slice(0, 43),
+    `${validKey.slice(0, 43)}==`,
+    // 44 字符但 == 结尾：解码只有 31 字节，同样拒绝
+    `${validKey.slice(0, 42)}==`,
+    `=${validKey.slice(0, 43)}`,
+  ];
+  for (const bad of rejected) {
+    assert.equal(
+      readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: bad }),
+      null,
+      `应拒绝：${JSON.stringify(bad.slice(0, 12))}...`
+    );
+  }
+});
+
+test("URL-safe base64 变体不被意外接受", () => {
+  // 0xfb 重复的 32 字节，标准 base64 一定包含 + 和 /
+  const buffer = Buffer.alloc(32, 0xfb);
+  const standard = buffer.toString("base64");
+  assert.ok(standard.includes("+"));
+  assert.ok(standard.includes("/"));
+  assert.ok(readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: standard }));
+
+  const urlSafe = standard.replace(/\+/g, "-").replace(/\//g, "_");
+  assert.equal(
+    readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: urlSafe }),
+    null
+  );
+});
+
+test("非规范 base64（多余尾部 bit）被拒绝", () => {
+  // 43 个 A + '='：全零密钥的规范形式；把第 43 位换成 'B' 后
+  // 解码仍是 32 字节，但 re-encode 不等于输入，必须拒绝
+  const canonical = Buffer.alloc(32, 0).toString("base64");
+  assert.equal(canonical, `${"A".repeat(43)}=`);
+  assert.ok(readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: canonical }));
+
+  const nonCanonical = `${"A".repeat(42)}B=`;
+  assert.equal(Buffer.from(nonCanonical, "base64").length, 32);
+  assert.equal(
+    readMusicCredentialKey({ MUSIC_CREDENTIAL_KEY: nonCanonical }),
+    null
+  );
+});
+
 test("AES-256-GCM 加密解密往返一致", () => {
   const env = makeEnv();
   const plaintext = "MUSIC_U=secret-token; os=pc";

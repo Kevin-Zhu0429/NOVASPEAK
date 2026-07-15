@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { migrateChannels } from "./channels.js";
 import { migrateAvatarColumn } from "./avatar.js";
-import { migrateNeteaseAccounts } from "./music/migrate.js";
+import {
+  backupBeforeNeteaseMigration,
+  migrateNeteaseAccounts,
+} from "./music/migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +24,11 @@ fs.mkdirSync(path.dirname(databasePath), {
 fs.mkdirSync(dataDirectory, {
   recursive: true,
 });
+
+// 打开数据库会自动创建文件，因此必须在打开前判断
+// “数据库在本次启动前是否已经存在且非空”，供首次网易云迁移备份使用
+const preExistingDatabase =
+  fs.existsSync(databasePath) && fs.statSync(databasePath).size > 0;
 
 const db = new Database(databasePath);
 
@@ -167,7 +175,18 @@ migrateAvatarColumn(db);
 
 migrateChannels(db);
 
-// 网易云音乐机器人：账号绑定凭据表
+// 网易云音乐机器人：账号绑定凭据表。
+// 首次迁移前对既有数据库做在线备份；备份失败必须让启动失败，
+// 绝不允许忽略错误继续执行 schema 迁移。
+const neteaseBackup = await backupBeforeNeteaseMigration(db, {
+  databasePath,
+  preExistingDatabase,
+});
+if (neteaseBackup.backedUp) {
+  console.log(
+    `Database backup created before Netease migration: ${neteaseBackup.backupPath}`
+  );
+}
 migrateNeteaseAccounts(db);
 
 console.log(`SQLite database ready: ${databasePath}`);
