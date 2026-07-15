@@ -1,5 +1,6 @@
 const path = require("node:path");
-const { app, BrowserWindow, session, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
+const { startNeteaseLogin } = require("./netease-login");
 
 const DEV_SERVER_URL = "http://localhost:5173";
 const PROD_INDEX_PATH = path.join(__dirname, "..", "client", "dist", "index.html");
@@ -33,6 +34,9 @@ function buildDevServerErrorPage() {
 </html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
+
+// NovaSpeak 主窗口引用：IPC 调用来源校验与登录窗口父窗口都依赖它
+let mainWindow = null;
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -76,12 +80,28 @@ function createMainWindow() {
     win.loadFile(PROD_INDEX_PATH);
   }
 
+  win.on("closed", () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+    }
+  });
+
+  mainWindow = win;
   return win;
 }
 
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
+  });
+
+  // 网易云登录：唯一、明确的 IPC handler。
+  // 只接受 NovaSpeak 主窗口发起的调用，登录窗口或其他来源一律拒绝。
+  ipcMain.handle("nova:netease-login", (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      return { ok: false, error: "未授权的调用来源" };
+    }
+    return startNeteaseLogin(mainWindow);
   });
 
   createMainWindow();

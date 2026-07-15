@@ -5,6 +5,7 @@ import ConnectionStatus from "./ConnectionStatus";
 import NetworkStats from "./NetworkStats";
 import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
+import MusicPanel from "../music/MusicPanel";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
@@ -37,6 +38,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [deafen, setDeafen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [devicesOpen, setDevicesOpen] = useState(false);
+  const [musicOpen, setMusicOpen] = useState(false);
   const [inputId, setInputId] = useState("");
   const [outputId, setOutputId] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -460,7 +462,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} micConstraints={micConstraints} onToggleMicConstraint={toggleMicConstraint} micConstraintError={micConstraintError} />}
-      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => setDevicesOpen((value) => !value)} onLeave={() => onLeave?.()} />
+      {musicOpen && <MusicPanel apiBase={apiBase} onClose={() => setMusicOpen(false)} />}
+      <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} musicOpen={musicOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => { setDevicesOpen((value) => { const next = !value; if (next) setMusicOpen(false); return next; }); }} onMusic={() => { setMusicOpen((value) => { const next = !value; if (next) setDevicesOpen(false); return next; }); }} onLeave={() => onLeave?.()} />
     </div>
   );
 }
