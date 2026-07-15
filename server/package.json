@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "node index.js",
     "create-captain": "node scripts/create-captain.js",
-    "use-nicknames": "node scripts/use-nicknames-as-login.js"
+    "use-nicknames": "node scripts/use-nicknames-as-login.js",
+    "music-bot:probe": "node scripts/music-bot-probe.js"
   },
   "keywords": [],
   "author": "Kevin",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@livekit/rtc-node": "0.13.31",
     "better-sqlite3": "^12.11.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
