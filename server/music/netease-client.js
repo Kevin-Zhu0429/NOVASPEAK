@@ -114,7 +114,90 @@ export function createNeteaseClient({
     return apiModule;
   }
 
+  function requireCookie(cookieHeader) {
+    if (typeof cookieHeader !== "string" || !cookieHeader.trim()) {
+      throw new NeteaseError(
+        NETEASE_ERROR.SESSION_INVALID,
+        "网易云登录信息无效，请重新登录"
+      );
+    }
+  }
+
+  async function callApi(method, params) {
+    try {
+      return await withTimeout(getApi()[method](params), timeoutMs);
+    } catch (error) {
+      throw toNeteaseError(error);
+    }
+  }
+
   return {
+    /**
+     * 分页读取指定网易云账号的歌单（自建 + 收藏）。
+     * 必须使用当前用户自己的 Cookie 和数据库中记录的 netease_user_id。
+     * 返回第三方原始歌单数组 + more 标记，由上层标准化。
+     */
+    async listUserPlaylists({ neteaseUserId, cookie, limit = 30, offset = 0 }) {
+      requireCookie(cookie);
+      if (typeof neteaseUserId !== "string" || !/^\d+$/.test(neteaseUserId)) {
+        throw new NeteaseError(
+          NETEASE_ERROR.SESSION_INVALID,
+          "网易云账号信息无效，请重新登录"
+        );
+      }
+
+      const response = await callApi("user_playlist", {
+        uid: neteaseUserId,
+        limit,
+        offset,
+        cookie,
+      });
+
+      const body = response?.body;
+      if (!body || body.code !== 200 || !Array.isArray(body.playlist)) {
+        throw new NeteaseError(
+          NETEASE_ERROR.REQUEST_FAILED,
+          "网易云返回了无效的歌单数据"
+        );
+      }
+
+      return { playlists: body.playlist, more: body.more === true };
+    },
+
+    /**
+     * 分页读取歌单内歌曲。playlist_track_all 内部先取歌单 trackIds
+     * 再查 song_detail，最终 body 为 { code, songs, privileges }。
+     */
+    async listPlaylistTracks({ playlistId, cookie, limit = 50, offset = 0 }) {
+      requireCookie(cookie);
+      if (typeof playlistId !== "string" || !/^\d+$/.test(playlistId)) {
+        throw new NeteaseError(
+          NETEASE_ERROR.REQUEST_FAILED,
+          "歌单编号无效"
+        );
+      }
+
+      const response = await callApi("playlist_track_all", {
+        id: playlistId,
+        limit,
+        offset,
+        cookie,
+      });
+
+      const body = response?.body;
+      if (!body || body.code !== 200 || !Array.isArray(body.songs)) {
+        throw new NeteaseError(
+          NETEASE_ERROR.REQUEST_FAILED,
+          "网易云返回了无效的歌曲数据"
+        );
+      }
+
+      return {
+        songs: body.songs,
+        privileges: Array.isArray(body.privileges) ? body.privileges : [],
+      };
+    },
+
     /**
      * 校验网易云登录状态并返回账号资料。
      * cookieHeader 必须是当前用户自己的标准 Cookie 请求头字符串。

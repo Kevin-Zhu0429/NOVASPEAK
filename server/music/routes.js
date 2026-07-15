@@ -19,6 +19,12 @@ import {
 } from "./account-service.js";
 import { normalizeNeteaseCookie } from "./netease-cookie.js";
 import { NETEASE_ERROR, NeteaseError } from "./netease-client.js";
+import {
+  MusicLibraryError,
+  listPlaylistTracksPage,
+  listUserPlaylistsPage,
+} from "./library-service.js";
+import { isValidPlaylistId, parsePageParams } from "./netease-normalizers.js";
 
 function sendNeteaseError(res, error) {
   if (error instanceof NeteaseError) {
@@ -29,6 +35,17 @@ function sendNeteaseError(res, error) {
       return res.status(429).json({ error: error.message, code: error.code });
     }
     return res.status(502).json({ error: error.message, code: error.code });
+  }
+  if (error instanceof MusicLibraryError) {
+    return res
+      .status(error.status || 500)
+      .json({ error: error.message, code: error.code });
+  }
+  if (error?.code === MUSIC_NOT_CONFIGURED) {
+    return res.status(503).json({
+      error: "音乐功能尚未配置，请联系管理员",
+      code: MUSIC_NOT_CONFIGURED,
+    });
   }
   return null;
 }
@@ -132,6 +149,63 @@ export function createNeteaseMusicRouter({
     } catch (error) {
       console.error("Netease unbind error:", error?.message);
       return res.status(500).json({ error: "解绑网易云账号失败" });
+    }
+  });
+
+  router.get("/playlists", async (req, res) => {
+    const page = parsePageParams(req.query, { defaultLimit: 30, maxLimit: 50 });
+    if (!page.ok) {
+      return res
+        .status(400)
+        .json({ error: page.error, code: "INVALID_PAGINATION" });
+    }
+    try {
+      const result = await listUserPlaylistsPage({
+        db,
+        principalKey: req.musicPrincipal.key,
+        neteaseClient,
+        limit: page.limit,
+        offset: page.offset,
+        env,
+      });
+      return res.json(result);
+    } catch (error) {
+      const handled = sendNeteaseError(res, error);
+      if (handled) return handled;
+      console.error("Netease playlists error:", error?.message);
+      return res.status(500).json({ error: "获取网易云歌单失败" });
+    }
+  });
+
+  router.get("/playlists/:playlistId/tracks", async (req, res) => {
+    const playlistId = req.params.playlistId;
+    if (!isValidPlaylistId(playlistId)) {
+      return res
+        .status(400)
+        .json({ error: "歌单编号无效", code: "INVALID_PLAYLIST_ID" });
+    }
+    const page = parsePageParams(req.query, { defaultLimit: 50, maxLimit: 100 });
+    if (!page.ok) {
+      return res
+        .status(400)
+        .json({ error: page.error, code: "INVALID_PAGINATION" });
+    }
+    try {
+      const result = await listPlaylistTracksPage({
+        db,
+        principalKey: req.musicPrincipal.key,
+        neteaseClient,
+        playlistId,
+        limit: page.limit,
+        offset: page.offset,
+        env,
+      });
+      return res.json(result);
+    } catch (error) {
+      const handled = sendNeteaseError(res, error);
+      if (handled) return handled;
+      console.error("Netease playlist tracks error:", error?.message);
+      return res.status(500).json({ error: "获取歌单歌曲失败" });
     }
   });
 

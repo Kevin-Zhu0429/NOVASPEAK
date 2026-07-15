@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, Music, X } from "lucide-react";
 import {
   bindNeteaseSession,
   getNeteaseAccount,
   unbindNeteaseSession,
 } from "../../utils/music-api";
+import PlaylistList from "./PlaylistList";
+import PlaylistTracks from "./PlaylistTracks";
 
-// 网易云音乐面板（第 3 阶段：仅账号绑定）。
+// 网易云音乐面板（第 4 阶段：账号绑定 + 歌单浏览）。
 // Cookie 只在 loginNetease() 返回值 → bindNeteaseSession() 请求体之间
 // 一次性传递：不进 state、不进 ref、不写 localStorage/sessionStorage。
 export default function MusicPanel({ apiBase, onClose }) {
@@ -15,6 +17,9 @@ export default function MusicPanel({ apiBase, onClose }) {
   const [error, setError] = useState("");
   const [account, setAccount] = useState(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [activePlaylist, setActivePlaylist] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [libraryRevision, setLibraryRevision] = useState(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -42,6 +47,11 @@ export default function MusicPanel({ apiBase, onClose }) {
       mountedRef.current = false;
     };
   }, [apiBase]);
+
+  const handleSessionInvalid = useCallback(() => {
+    setSessionExpired(true);
+    setActivePlaylist(null);
+  }, []);
 
   const handleLogin = async () => {
     if (busy) return;
@@ -71,6 +81,10 @@ export default function MusicPanel({ apiBase, onClose }) {
       if (!mountedRef.current) return;
       setAccount(bindResult.account || null);
       setAvatarFailed(false);
+      // 重新登录成功：清空旧歌单和歌曲状态并重新加载
+      setSessionExpired(false);
+      setActivePlaylist(null);
+      setLibraryRevision((revision) => revision + 1);
     } catch (bindError) {
       if (mountedRef.current) {
         setError(bindError.message || "绑定网易云账号失败");
@@ -87,7 +101,10 @@ export default function MusicPanel({ apiBase, onClose }) {
     try {
       await unbindNeteaseSession(apiBase);
       if (!mountedRef.current) return;
+      // 退出后清空账号、歌单、当前歌单和歌曲状态
       setAccount(null);
+      setActivePlaylist(null);
+      setSessionExpired(false);
     } catch (unbindError) {
       if (mountedRef.current) {
         setError(unbindError.message || "退出网易云账号失败");
@@ -117,36 +134,71 @@ export default function MusicPanel({ apiBase, onClose }) {
       {loading ? (
         <div className="music-panel-loading">正在加载绑定状态……</div>
       ) : account ? (
-        <div className="music-account">
-          {account.avatarUrl && !avatarFailed ? (
-            <img
-              className="music-account-avatar"
-              src={account.avatarUrl}
-              alt=""
-              referrerPolicy="no-referrer"
-              onError={() => setAvatarFailed(true)}
-            />
-          ) : (
-            <div
-              className="music-account-avatar music-account-avatar-fallback"
-              aria-hidden="true"
-            >
-              <Music />
+        <>
+          <div className="music-account">
+            {account.avatarUrl && !avatarFailed ? (
+              <img
+                className="music-account-avatar"
+                src={account.avatarUrl}
+                alt=""
+                referrerPolicy="no-referrer"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <div
+                className="music-account-avatar music-account-avatar-fallback"
+                aria-hidden="true"
+              >
+                <Music />
+              </div>
+            )}
+            <div className="music-account-info">
+              <strong>{account.nickname || "网易云用户"}</strong>
+              <span>已绑定网易云音乐</span>
             </div>
-          )}
-          <div className="music-account-info">
-            <strong>{account.nickname || "网易云用户"}</strong>
-            <span>已绑定网易云音乐</span>
+            <button
+              type="button"
+              className="music-logout-button"
+              onClick={handleLogout}
+              disabled={busy}
+              aria-label="退出网易云账号"
+            >
+              {busy ? "处理中……" : "退出账号"}
+            </button>
           </div>
-          <button
-            type="button"
-            className="music-logout-button"
-            onClick={handleLogout}
-            disabled={busy}
-          >
-            {busy ? "处理中……" : "退出网易云账号"}
-          </button>
-        </div>
+
+          <div className="music-panel-body">
+            {sessionExpired ? (
+              <div className="music-session-expired">
+                <p>网易云登录已失效，请重新登录</p>
+                <button
+                  type="button"
+                  className="music-login-button"
+                  onClick={handleLogin}
+                  disabled={busy}
+                >
+                  <LogIn />
+                  {busy ? "等待登录……" : "重新登录网易云"}
+                </button>
+              </div>
+            ) : activePlaylist ? (
+              <PlaylistTracks
+                key={`${libraryRevision}-${activePlaylist.id}`}
+                apiBase={apiBase}
+                playlist={activePlaylist}
+                onBack={() => setActivePlaylist(null)}
+                onSessionInvalid={handleSessionInvalid}
+              />
+            ) : (
+              <PlaylistList
+                key={libraryRevision}
+                apiBase={apiBase}
+                onSelectPlaylist={setActivePlaylist}
+                onSessionInvalid={handleSessionInvalid}
+              />
+            )}
+          </div>
+        </>
       ) : (
         <div className="music-login">
           <p>绑定网易云账号后，就可以在频道里使用音乐机器人播放自己的歌单。</p>

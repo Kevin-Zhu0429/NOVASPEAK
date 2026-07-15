@@ -39,10 +39,22 @@ async function requestMusicApi(
       credentials: "include",
       ...options,
     });
-  } catch {
-    throw new Error("网络连接失败，请稍后重试");
+  } catch (error) {
+    // 主动取消原样抛出，调用方（组件卸载等）自行忽略
+    if (error?.name === "AbortError") throw error;
+    throw new Error("网络连接失败，请稍后重试", { cause: error });
   }
   return parseJsonResponse(response, fallbackError);
+}
+
+function buildPageQuery({ limit, offset } = {}) {
+  const params = new URLSearchParams();
+  if (limit !== undefined && limit !== null) params.set("limit", String(limit));
+  if (offset !== undefined && offset !== null) {
+    params.set("offset", String(offset));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 /**
@@ -87,5 +99,41 @@ export async function unbindNeteaseSession(apiBase, { fetchImpl } = {}) {
     "/api/music/netease/session",
     { method: "DELETE" },
     { fetchImpl, fallbackError: "退出网易云账号失败" }
+  );
+}
+
+/**
+ * 分页获取当前用户的网易云歌单。
+ * 返回 { playlists: [...], pagination: { limit, offset, more, total } }。
+ */
+export async function getNeteasePlaylists(
+  apiBase,
+  { limit, offset, signal, fetchImpl } = {}
+) {
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/playlists${buildPageQuery({ limit, offset })}`,
+    { method: "GET", signal },
+    { fetchImpl, fallbackError: "获取网易云歌单失败" }
+  );
+}
+
+/**
+ * 分页获取指定歌单的歌曲列表。
+ * 返回 { playlist, tracks: [...], pagination }。
+ */
+export async function getNeteasePlaylistTracks(
+  apiBase,
+  playlistId,
+  { limit, offset, signal, fetchImpl } = {}
+) {
+  if (typeof playlistId !== "string" || !playlistId.trim()) {
+    throw new Error("歌单编号无效");
+  }
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/playlists/${encodeURIComponent(playlistId.trim())}/tracks${buildPageQuery({ limit, offset })}`,
+    { method: "GET", signal },
+    { fetchImpl, fallbackError: "获取歌单歌曲失败" }
   );
 }

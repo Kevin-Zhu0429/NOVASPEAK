@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   bindNeteaseSession,
   getNeteaseAccount,
+  getNeteasePlaylists,
+  getNeteasePlaylistTracks,
   unbindNeteaseSession,
 } from "./music-api.js";
 
@@ -149,6 +151,97 @@ test("网络错误映射为稳定中文错误", async () => {
   await assert.rejects(
     () => getNeteaseAccount("", { fetchImpl }),
     /网络连接失败/
+  );
+});
+
+test("获取歌单：默认不带分页参数，带 credentials include", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { playlists: [], pagination: { limit: 30, offset: 0, more: false, total: null } })
+  );
+  const result = await getNeteasePlaylists("http://api.test", { fetchImpl });
+  assert.deepEqual(result.playlists, []);
+  assert.equal(calls[0].url, "http://api.test/api/music/netease/playlists");
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(calls[0].options.credentials, "include");
+  // 不提交 uid / userId
+  assert.ok(!calls[0].url.includes("uid"));
+  assert.ok(!calls[0].url.includes("userId"));
+});
+
+test("获取歌单：自定义分页参数（加载更多）", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { playlists: [], pagination: {} })
+  );
+  await getNeteasePlaylists("", { limit: 50, offset: 90, fetchImpl });
+  assert.equal(calls[0].url, "/api/music/netease/playlists?limit=50&offset=90");
+});
+
+test("获取歌曲列表：playlistId 路径编码", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { playlist: {}, tracks: [], pagination: {} })
+  );
+  await getNeteasePlaylistTracks("", "7044354223", {
+    limit: 50,
+    offset: 100,
+    fetchImpl,
+  });
+  assert.equal(
+    calls[0].url,
+    "/api/music/netease/playlists/7044354223/tracks?limit=50&offset=100"
+  );
+  assert.equal(calls[0].options.credentials, "include");
+
+  const { calls: encodedCalls, fetchImpl: encodedFetch } = captureFetch(
+    jsonResponse(200, { playlist: {}, tracks: [], pagination: {} })
+  );
+  await getNeteasePlaylistTracks("", "1/2?x", { fetchImpl: encodedFetch });
+  assert.equal(
+    encodedCalls[0].url,
+    "/api/music/netease/playlists/1%2F2%3Fx/tracks"
+  );
+
+  await assert.rejects(
+    () => getNeteasePlaylistTracks("", "", { fetchImpl }),
+    /歌单编号无效/
+  );
+});
+
+test("AbortSignal 传递给 fetch，Abort 错误原样抛出", async () => {
+  const controller = new AbortController();
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { playlists: [], pagination: {} })
+  );
+  await getNeteasePlaylists("", { signal: controller.signal, fetchImpl });
+  assert.equal(calls[0].options.signal, controller.signal);
+
+  const abortingFetch = async () => {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  };
+  await assert.rejects(
+    () => getNeteasePlaylists("", { fetchImpl: abortingFetch }),
+    (error) => error.name === "AbortError"
+  );
+});
+
+test("歌单接口错误保留后端 code/status", async () => {
+  const { fetchImpl } = captureFetch(
+    jsonResponse(401, {
+      error: "网易云登录已失效，请重新登录",
+      code: "NETEASE_SESSION_INVALID",
+    })
+  );
+  await assert.rejects(
+    () => getNeteasePlaylists("", { fetchImpl }),
+    (error) =>
+      error.code === "NETEASE_SESSION_INVALID" && error.status === 401
+  );
+
+  const { fetchImpl: htmlFetch } = captureFetch(htmlResponse(200));
+  await assert.rejects(
+    () => getNeteasePlaylistTracks("", "123", { fetchImpl: htmlFetch }),
+    /获取歌单歌曲失败/
   );
 });
 
