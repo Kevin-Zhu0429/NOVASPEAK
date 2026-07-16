@@ -374,9 +374,37 @@ export function cancelPendingItemsForPrincipal(db, principalKey, now = Date.now(
 }
 
 /**
- * 领取下一首（供下一阶段机器人调用；本阶段不在运行中自动消费）。
- * 每频道最多一个 playing；公平选桶后在同一事务中完成
+ * 是否存在待播放歌曲（manager 决定是否需要探测解码器 / claim）。
+ */
+export function hasPendingItems(db, channelId) {
+  return (
+    db
+      .prepare(
+        "SELECT 1 AS one FROM music_queue_items WHERE channel_id = ? AND status = 'pending' LIMIT 1"
+      )
+      .get(channelId) !== undefined
+  );
+}
+
+/**
+ * 所有存在 pending 歌曲的频道（manager 定时扫描用）。
+ */
+export function listChannelsWithPending(db) {
+  return db
+    .prepare(
+      "SELECT DISTINCT channel_id AS channelId FROM music_queue_items WHERE status = 'pending'"
+    )
+    .all()
+    .map((row) => row.channelId);
+}
+
+/**
+ * 领取下一首。每频道最多一个 playing；公平选桶后在同一事务中完成
  * pending → playing、started_at、游标与 revision 更新。
+ *
+ * 返回内部 claim receipt：{ queueItem, previousLastServedBucketOrder,
+ * servedBucketOrder }，供基础设施故障时 requeueClaimedItem 恢复
+ * 原公平位置。receipt 绝不暴露给前端。
  */
 export function claimNextQueueItem(db, { channelId, now = Date.now() }) {
   return db.transaction(() => {
@@ -424,9 +452,52 @@ export function claimNextQueueItem(db, { channelId, now = Date.now() }) {
         updated_at = excluded.updated_at
     `).run(channelId, bucketOrder ?? 0, now);
 
-    return db
-      .prepare("SELECT * FROM music_queue_items WHERE id = ?")
-      .get(next.id);
+    return {
+      queueItem: db
+        .prepare("SELECT * FROM music_queue_items WHERE id = ?")
+        .get(next.id),
+      previousLastServedBucketOrder: state.last_served_bucket_order,
+      servedBucketOrder: bucketOrder ?? 0,
+    };
+  })();
+}
+
+/**
+ * 基础设施故障回退：playing → pending、清空 started_at / failure_code，
+ * 并把公平游标恢复到 claim 之前的值——A1 因 FFmpeg/LiveKit 暂时失败
+ * 恢复后仍然是 A1，不会无故轮到 B1。
+ */
+export function requeueClaimedItem(
+  db,
+  { queueItemId, previousLastServedBucketOrder, now = Date.now() }
+) {
+  return db.transaction(() => {
+    const row = db
+      .prepare(
+        "SELECT id, channel_id, status FROM music_queue_items WHERE id = ?"
+      )
+      .get(queueItemId);
+    if (!row || row.status !== "playing") return false;
+
+    db.prepare(
+      "UPDATE music_queue_items SET status = 'pending', started_at = NULL, failure_code = NULL WHERE id = ? AND status = 'playing'"
+    ).run(row.id);
+
+    db.prepare(`
+      INSERT INTO music_queue_state (channel_id, last_served_bucket_order, revision, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(channel_id) DO UPDATE SET
+        last_served_bucket_order = excluded.last_served_bucket_order,
+        revision = revision + 1,
+        updated_at = excluded.updated_at
+    `).run(
+      row.channel_id,
+      Number.isFinite(Number(previousLastServedBucketOrder))
+        ? Number(previousLastServedBucketOrder)
+        : 0,
+      now
+    );
+    return true;
   })();
 }
 

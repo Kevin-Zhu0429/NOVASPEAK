@@ -86,14 +86,22 @@ export default function MusicQueue({ apiBase, channelId }) {
     <div className="music-queue-section">
       {nowPlaying && (
         <div className="music-queue-now-playing">
-          <span className="music-queue-now-label">正在播放</span>
-          <QueueSong item={nowPlaying} />
+          <QueueCover picUrl={nowPlaying.song.album?.picUrl} />
+          <span className="music-track-main">
+            <span className="music-queue-now-label">音乐机器人正在播放</span>
+            <strong className="music-track-name">{nowPlaying.song.name}</strong>
+            <span className="music-track-meta">
+              {formatArtists(nowPlaying.song.artists)} ·{" "}
+              {nowPlaying.requester.displayName}
+              {nowPlaying.requester.isCurrentUser ? "（我）" : ""} 点歌
+            </span>
+          </span>
         </div>
       )}
 
-      {items.length === 0 && !error ? (
+      {items.length === 0 && !nowPlaying && !error ? (
         <div className="music-panel-empty">频道队列还是空的</div>
-      ) : (
+      ) : items.length === 0 ? null : (
         <ul className="music-queue-list">
           {items.map((item) => (
             <li
@@ -138,17 +146,6 @@ export default function MusicQueue({ apiBase, channelId }) {
 
       {error && <div className="music-panel-error">{error}</div>}
     </div>
-  );
-}
-
-function QueueSong({ item }) {
-  return (
-    <span className="music-track-main">
-      <strong className="music-track-name">{item.song.name}</strong>
-      <span className="music-track-meta">
-        {formatArtists(item.song.artists)} · {item.requester.displayName} 点歌
-      </span>
-    </span>
   );
 }
 

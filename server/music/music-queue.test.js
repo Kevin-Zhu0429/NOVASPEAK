@@ -16,9 +16,17 @@ import {
   finishQueueItem,
   getQueueSnapshot,
   getRemainingQueueCapacity,
+  hasPendingItems,
+  listChannelsWithPending,
   recoverInterruptedQueueItems,
   removeQueueDataForPrincipal,
+  requeueClaimedItem,
 } from "./music-queue.js";
+
+// claim 返回 receipt；多数测试只关心 queueItem 本身
+function claimItem(db, options) {
+  return claimNextQueueItem(db, options)?.queueItem ?? null;
+}
 
 // 全部使用 in-memory / 临时数据库，绝不触碰真实生产数据
 
@@ -86,7 +94,7 @@ test("A/B/C 轮询消费（claim 顺序）+ 同用户 FIFO + B 耗尽后继续 A
 
   const played = [];
   for (;;) {
-    const item = claimNextQueueItem(db, { channelId: "cs2" });
+    const item = claimItem(db, { channelId: "cs2" });
     if (!item) break;
     played.push(item.song_name);
     finishQueueItem(db, { queueItemId: item.id, outcome: "finished" });
@@ -99,16 +107,16 @@ test("新用户动态加入：A 播放一首后 B 加入，B 下一首优先", (
   const db = createDb();
   enqueueMany(db, "user-a", ["A1", "A2", "A3"]);
 
-  const first = claimNextQueueItem(db, { channelId: "cs2" });
+  const first = claimItem(db, { channelId: "cs2" });
   assert.equal(first.song_name, "A1");
   finishQueueItem(db, { queueItemId: first.id, outcome: "finished" });
 
   enqueueMany(db, "user-b", ["B1"]);
-  const second = claimNextQueueItem(db, { channelId: "cs2" });
+  const second = claimItem(db, { channelId: "cs2" });
   assert.equal(second.song_name, "B1");
   finishQueueItem(db, { queueItemId: second.id, outcome: "finished" });
 
-  const third = claimNextQueueItem(db, { channelId: "cs2" });
+  const third = claimItem(db, { channelId: "cs2" });
   assert.equal(third.song_name, "A2");
   db.close();
 });
@@ -118,11 +126,11 @@ test("空桶重新加入后继续轮询（桶顺序稳定）", () => {
   enqueueMany(db, "user-a", ["A1"]);
   enqueueMany(db, "user-b", ["B1"]);
 
-  let item = claimNextQueueItem(db, { channelId: "cs2" });
+  let item = claimItem(db, { channelId: "cs2" });
   finishQueueItem(db, { queueItemId: item.id, outcome: "finished" });
-  item = claimNextQueueItem(db, { channelId: "cs2" });
+  item = claimItem(db, { channelId: "cs2" });
   finishQueueItem(db, { queueItemId: item.id, outcome: "finished" });
-  assert.equal(claimNextQueueItem(db, { channelId: "cs2" }), null);
+  assert.equal(claimItem(db, { channelId: "cs2" }), null);
 
   // B 重新添加，桶已存在不再新建
   enqueueMany(db, "user-b", ["B2"]);
@@ -141,15 +149,15 @@ test("每频道最多一个 playing；claim 原子性", () => {
   const db = createDb();
   enqueueMany(db, "user-a", ["A1", "A2"]);
 
-  const first = claimNextQueueItem(db, { channelId: "cs2" });
+  const first = claimItem(db, { channelId: "cs2" });
   assert.equal(first.status, "playing");
   assert.ok(first.started_at);
 
   // 已有 playing 时不再领取
-  assert.equal(claimNextQueueItem(db, { channelId: "cs2" }), null);
+  assert.equal(claimItem(db, { channelId: "cs2" }), null);
 
   finishQueueItem(db, { queueItemId: first.id, outcome: "finished" });
-  const second = claimNextQueueItem(db, { channelId: "cs2" });
+  const second = claimItem(db, { channelId: "cs2" });
   assert.equal(second.song_name, "A2");
   db.close();
 });
@@ -159,7 +167,7 @@ test("finish 状态转换：finished/skipped/failed，且只处理 playing", () 
   enqueueMany(db, "user-a", ["A1", "A2", "A3"]);
 
   for (const outcome of ["finished", "skipped", "failed"]) {
-    const item = claimNextQueueItem(db, { channelId: "cs2" });
+    const item = claimItem(db, { channelId: "cs2" });
     finishQueueItem(db, {
       queueItemId: item.id,
       outcome,
@@ -194,7 +202,7 @@ test("finish 状态转换：finished/skipped/failed，且只处理 playing", () 
 test("recoverInterruptedQueueItems：playing 恢复 pending，可重复执行", () => {
   const db = createDb();
   enqueueMany(db, "user-a", ["A1", "A2"]);
-  const item = claimNextQueueItem(db, { channelId: "cs2" });
+  const item = claimItem(db, { channelId: "cs2" });
   assert.equal(item.song_name, "A1");
 
   const recovered = recoverInterruptedQueueItems(db);
@@ -209,7 +217,7 @@ test("recoverInterruptedQueueItems：playing 恢复 pending，可重复执行", 
   assert.equal(recoverInterruptedQueueItems(db), 0);
 
   // 恢复后 A1 仍然是下一首（桶内 FIFO 保持）
-  assert.equal(claimNextQueueItem(db, { channelId: "cs2" }).song_name, "A1");
+  assert.equal(claimItem(db, { channelId: "cs2" }).song_name, "A1");
   db.close();
 });
 
@@ -221,10 +229,10 @@ test("不同频道队列完全隔离", () => {
   assert.deepEqual(snapshotLabels(db, "cs2"), ["CS-A1"]);
   assert.deepEqual(snapshotLabels(db, "apex"), ["APEX-A1"]);
 
-  const item = claimNextQueueItem(db, { channelId: "cs2" });
+  const item = claimItem(db, { channelId: "cs2" });
   assert.equal(item.song_name, "CS-A1");
   // cs2 有 playing 不影响 apex 领取
-  assert.equal(claimNextQueueItem(db, { channelId: "apex" }).song_name, "APEX-A1");
+  assert.equal(claimItem(db, { channelId: "apex" }).song_name, "APEX-A1");
   db.close();
 });
 
@@ -428,7 +436,7 @@ test("服务重启后队列与游标保留（文件数据库）", async () => {
       requesterDisplayName: "B",
       tracks: [makeTrack("B1", 3)],
     });
-    const claimed = claimNextQueueItem(db, { channelId: "cs2" });
+    const claimed = claimItem(db, { channelId: "cs2" });
     assert.equal(claimed.song_name, "A1");
     finishQueueItem(db, { queueItemId: claimed.id, outcome: "finished" });
     db.close();
@@ -441,7 +449,7 @@ test("服务重启后队列与游标保留（文件数据库）", async () => {
       .get();
     assert.equal(state.last_served_bucket_order, 1);
     // 游标保留：下一首应轮到 B
-    const next = claimNextQueueItem(db, { channelId: "cs2" });
+    const next = claimItem(db, { channelId: "cs2" });
     assert.equal(next.song_name, "B1");
     db.close();
   } finally {
@@ -486,5 +494,60 @@ test("快照不暴露 principal_key / guest UUID，canCancel 正确", () => {
       }),
     (error) => error.code === MUSIC_QUEUE_ERROR.CHANNEL_NOT_FOUND
   );
+  db.close();
+});
+
+test("claim receipt：包含前后游标，requeue 恢复公平位置（A1 仍是 A1）", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["RA1", "RA2"]);
+  enqueueMany(db, "user-b", ["RB1"]);
+
+  const receipt = claimNextQueueItem(db, { channelId: "cs2" });
+  assert.equal(receipt.queueItem.song_name, "RA1");
+  assert.equal(receipt.previousLastServedBucketOrder, 0);
+  assert.equal(receipt.servedBucketOrder, 1);
+
+  // 基础设施故障：回退并恢复游标
+  const requeued = requeueClaimedItem(db, {
+    queueItemId: receipt.queueItem.id,
+    previousLastServedBucketOrder: receipt.previousLastServedBucketOrder,
+  });
+  assert.equal(requeued, true);
+
+  const row = db
+    .prepare("SELECT status, started_at, failure_code FROM music_queue_items WHERE id = ?")
+    .get(receipt.queueItem.id);
+  assert.equal(row.status, "pending");
+  assert.equal(row.started_at, null);
+  assert.equal(row.failure_code, null);
+
+  // 恢复后下一首仍是 A1，而不是 B1
+  const retry = claimNextQueueItem(db, { channelId: "cs2" });
+  assert.equal(retry.queueItem.song_name, "RA1");
+
+  // 成功后游标推进，轮到 B
+  finishQueueItem(db, { queueItemId: retry.queueItem.id, outcome: "finished" });
+  assert.equal(claimItem(db, { channelId: "cs2" }).song_name, "RB1");
+
+  // 非 playing 项目 requeue 幂等返回 false
+  assert.equal(
+    requeueClaimedItem(db, {
+      queueItemId: receipt.queueItem.id,
+      previousLastServedBucketOrder: 0,
+    }),
+    false
+  );
+  db.close();
+});
+
+test("hasPendingItems / listChannelsWithPending", () => {
+  const db = createDb();
+  assert.equal(hasPendingItems(db, "cs2"), false);
+  assert.deepEqual(listChannelsWithPending(db), []);
+
+  enqueueMany(db, "user-a", ["P1"]);
+  enqueueMany(db, "user-a", ["P2"], "apex");
+  assert.equal(hasPendingItems(db, "cs2"), true);
+  assert.deepEqual(listChannelsWithPending(db).sort(), ["apex", "cs2"]);
   db.close();
 });

@@ -376,3 +376,126 @@ test("channelId 缺失或非法时直接拒绝", async () => {
     );
   }
 });
+
+// ---------- createMusicBotAudioSession（5B 通用会话）----------
+
+test("音乐会话：连接、发布、captureFrame/waitForPlayout、幂等 close", async () => {
+  const { rtc, log, captured } = createMockRtc();
+  const { createMusicBotAudioSession } = await import("./livekit-bot.js");
+
+  const session = await createMusicBotAudioSession({
+    channelId: "music-ch",
+    env: testEnv,
+    loadRtc: async () => rtc,
+  });
+  assert.equal(session.identity, "music-bot:music-ch");
+
+  const samples = new Int16Array(480).fill(3);
+  await session.captureFrame(samples);
+  await session.captureFrame(samples);
+  await session.waitForPlayout();
+
+  // AudioSource 48k/mono；AudioFrame 480 采样
+  const sourceEvent = log.find((entry) => entry.event === "source-created");
+  assert.equal(sourceEvent.sampleRate, 48000);
+  assert.equal(sourceEvent.numChannels, 1);
+  assert.equal(captured.frames.length, 2);
+  assert.equal(captured.frames[0].samplesPerChannel, 480);
+  assert.equal(captured.frames[0].sampleRate, 48000);
+
+  // close 两次：清理只执行一次
+  await session.close();
+  await session.close();
+  const names = eventNames(log);
+  assert.equal(names.filter((n) => n === "unpublish").length, 1);
+  assert.equal(names.filter((n) => n === "source-close").length, 1);
+  assert.equal(names.filter((n) => n === "disconnect").length, 1);
+
+  // close 后 captureFrame 稳定失败
+  await assert.rejects(
+    () => session.captureFrame(samples),
+    (error) => error.code === MUSIC_BOT_ERROR.PUBLISH_FAILED
+  );
+  // close 后 waitForPlayout 安全 no-op
+  await session.waitForPlayout();
+});
+
+test("音乐会话：connect 失败后 close 安全，publish 失败后资源仍释放", async () => {
+  const { createMusicBotAudioSession } = await import("./livekit-bot.js");
+
+  const { rtc: badConnect, log: connectLog } = createMockRtc({ failConnect: true });
+  await assert.rejects(
+    () =>
+      createMusicBotAudioSession({
+        channelId: "c1",
+        env: testEnv,
+        loadRtc: async () => badConnect,
+      }),
+    (error) => error.code === MUSIC_BOT_ERROR.CONNECT_FAILED
+  );
+  assert.ok(eventNames(connectLog).includes("disconnect"));
+
+  const { rtc: badPublish, log: publishLog } = createMockRtc({ failPublish: true });
+  await assert.rejects(
+    () =>
+      createMusicBotAudioSession({
+        channelId: "c1",
+        env: testEnv,
+        loadRtc: async () => badPublish,
+      }),
+    (error) => error.code === MUSIC_BOT_ERROR.PUBLISH_FAILED
+  );
+  const publishNames = eventNames(publishLog);
+  assert.ok(publishNames.includes("source-close"));
+  assert.ok(publishNames.includes("disconnect"));
+});
+
+test("音乐会话：captureFrame 错误映射稳定 MusicBotError；error 与 close 并发安全", async () => {
+  const { createMusicBotAudioSession } = await import("./livekit-bot.js");
+  const failing = createMockRtc();
+  // 让 captureFrame 抛出
+  const OriginalSource = failing.rtc.AudioSource;
+  failing.rtc.AudioSource = class extends OriginalSource {
+    async captureFrame() {
+      throw new Error("native capture failure");
+    }
+  };
+
+  const session = await createMusicBotAudioSession({
+    channelId: "c2",
+    env: testEnv,
+    loadRtc: async () => failing.rtc,
+  });
+
+  await assert.rejects(
+    () => session.captureFrame(new Int16Array(480)),
+    (error) =>
+      error.code === MUSIC_BOT_ERROR.PUBLISH_FAILED &&
+      !String(error.message).includes("native")
+  );
+
+  // 错误后并发 close：只清理一次、不抛出
+  await Promise.all([session.close(), session.close(), session.close()]);
+  const names = eventNames(failing.log);
+  assert.equal(names.filter((n) => n === "disconnect").length, 1);
+  assert.equal(names.filter((n) => n === "source-close").length, 0 + 1);
+});
+
+test("音乐会话：RTC 加载失败 → LIVEKIT_RTC_UNAVAILABLE；缺配置 → LIVEKIT_NOT_CONFIGURED", async () => {
+  const { createMusicBotAudioSession } = await import("./livekit-bot.js");
+  await assert.rejects(
+    () =>
+      createMusicBotAudioSession({
+        channelId: "c3",
+        env: testEnv,
+        loadRtc: async () => {
+          throw new Error("no native module");
+        },
+      }),
+    (error) => error.code === MUSIC_BOT_ERROR.RTC_UNAVAILABLE
+  );
+  await assert.rejects(
+    () => createMusicBotAudioSession({ channelId: "c3", env: {} }),
+    (error) => error.code === MUSIC_BOT_ERROR.NOT_CONFIGURED
+  );
+});

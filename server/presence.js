@@ -323,6 +323,21 @@ export function createPresenceService(options = {}) {
     return sendJson(match.connection, command);
   }
 
+  // 只读查询：频道内是否存在稳定听众（音乐机器人播放前提）。
+  // 只计算 state === "in_channel" 且频道完全一致的连接；
+  // lobby / reconnecting / 其他频道不算。不修改任何协议或状态。
+  function hasUsersInChannel(channelId) {
+    if (typeof channelId !== "string" || !channelId) return false;
+    for (const principal of principals.values()) {
+      for (const state of principal.connections.values()) {
+        if (state.state === "in_channel" && state.channelId === channelId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // 只读查询：指定用户当前是否位于指定频道（音乐队列等接口的频道校验）。
   // 正式用户 id 映射为内部 user:<id>，guest:UUID 保持原值；
   // 多标签页只要有一个连接命中即可；in_channel 允许，
@@ -591,6 +606,7 @@ export function createPresenceService(options = {}) {
     sendCommandToChannelConnection,
     sendVoiceControlToParticipant,
     isUserInChannel,
+    hasUsersInChannel,
     setConnectionLocation,
     broadcastAnnouncement,
     beginParticipantMove,

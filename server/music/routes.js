@@ -66,8 +66,17 @@ export function createNeteaseMusicRouter({
   neteaseClient,
   requireAuthenticated,
   presenceService = null,
+  onQueueUpdated = null,
   env = process.env,
 }) {
+  // 入队成功后通知音乐机器人管理器（绝不 await、绝不影响 HTTP 响应）
+  function notifyQueueUpdated(channelId) {
+    try {
+      onQueueUpdated?.(channelId);
+    } catch (error) {
+      console.error("Music queue kick error:", error?.message);
+    }
+  }
   const router = express.Router();
 
   // 频道队列接口的成员校验：不能只相信前端传来的 channelId，
@@ -321,6 +330,7 @@ export function createNeteaseMusicRouter({
         const queueItemId = result.queueItemIds[0];
         const projected = snapshot.items.find((item) => item.id === queueItemId);
 
+        notifyQueueUpdated(req.params.channelId);
         return res.json({
           success: true,
           addedCount: result.addedCount,
@@ -393,6 +403,7 @@ export function createNeteaseMusicRouter({
           playlistId,
         });
 
+        notifyQueueUpdated(req.params.channelId);
         return res.json({
           success: true,
           addedCount: result.addedCount,

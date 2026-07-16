@@ -18,8 +18,8 @@ export const MUSIC_BOT_ERROR = Object.freeze({
 });
 
 export class MusicBotError extends Error {
-  constructor(code, message) {
-    super(message);
+  constructor(code, message, options) {
+    super(message, options);
     this.name = "MusicBotError";
     this.code = code;
   }
@@ -216,5 +216,169 @@ export async function playTestToneInChannel({
     framesSent,
     totalFrames: activeTone.totalFrames,
     identity: getMusicBotIdentity(channelId),
+  };
+}
+
+/**
+ * 通用音乐机器人会话（Stage 5B：整个队列周期复用 Room/AudioSource/Track）。
+ *
+ * - 只发布音频，不订阅、不发数据；同频道只应存在一个会话；
+ * - close() 完全幂等：connect / publish 失败后、error 与 close 并发时
+ *   都可安全调用，每项资源最多释放一次；
+ * - 绝不调用 rtc-node 全局 dispose()（那只属于一次性 probe CLI）；
+ * - 普通 Express 启动不加载原生模块（loadRtc 懒加载）。
+ */
+export async function createMusicBotAudioSession({
+  channelId,
+  env = process.env,
+  loadRtc = defaultLoadRtc,
+  token = null,
+  sampleRate = 48000,
+  channels = 1,
+  queueSizeMs = 200,
+} = {}) {
+  if (typeof channelId !== "string" || !channelId.trim()) {
+    throw new MusicBotError(
+      MUSIC_BOT_ERROR.NOT_CONFIGURED,
+      "缺少有效的 channelId"
+    );
+  }
+  const { url } = readLiveKitEnv(env);
+  const botToken = token || (await buildMusicBotToken(channelId, env));
+
+  let rtc;
+  try {
+    rtc = await loadRtc();
+  } catch {
+    throw new MusicBotError(
+      MUSIC_BOT_ERROR.RTC_UNAVAILABLE,
+      "无法加载 @livekit/rtc-node 原生模块"
+    );
+  }
+
+  const room = new rtc.Room();
+  let source = null;
+  let publication = null;
+  let closed = false;
+  let closePromise = null;
+
+  // close 幂等：并发调用共享同一 Promise，每项资源最多释放一次
+  async function close() {
+    if (closePromise) return closePromise;
+    closed = true;
+    closePromise = (async () => {
+      if (publication && room.localParticipant) {
+        const sid = publication.sid;
+        publication = null;
+        try {
+          await room.localParticipant.unpublishTrack(sid, true);
+        } catch {
+          // 忽略清理失败，继续释放其余资源
+        }
+      }
+      if (source) {
+        const activeSource = source;
+        source = null;
+        try {
+          await activeSource.close();
+        } catch {
+          // 忽略清理失败
+        }
+      }
+      try {
+        await room.disconnect();
+      } catch {
+        // 忽略清理失败
+      }
+    })();
+    return closePromise;
+  }
+
+  try {
+    try {
+      await room.connect(url, botToken, { autoSubscribe: false });
+    } catch {
+      throw new MusicBotError(
+        MUSIC_BOT_ERROR.CONNECT_FAILED,
+        "连接 LiveKit 频道失败"
+      );
+    }
+
+    try {
+      source = new rtc.AudioSource(sampleRate, channels, queueSizeMs);
+      const track = rtc.LocalAudioTrack.createAudioTrack(
+        "music-bot-audio",
+        source
+      );
+      const publishOptions = new rtc.TrackPublishOptions({
+        source: rtc.TrackSource.SOURCE_MICROPHONE,
+      });
+      publication = await room.localParticipant.publishTrack(
+        track,
+        publishOptions
+      );
+    } catch {
+      throw new MusicBotError(
+        MUSIC_BOT_ERROR.PUBLISH_FAILED,
+        "发布音乐音轨失败"
+      );
+    }
+  } catch (error) {
+    // connect / publish 失败后 close 仍安全
+    await close();
+    throw error;
+  }
+
+  return {
+    identity: getMusicBotIdentity(channelId),
+
+    get closed() {
+      return closed;
+    },
+
+    /**
+     * 推送一帧 PCM（Int16Array，480 采样）。失败转换为稳定 MusicBotError。
+     */
+    async captureFrame(samples) {
+      if (closed || !source) {
+        throw new MusicBotError(
+          MUSIC_BOT_ERROR.PUBLISH_FAILED,
+          "音乐会话已关闭"
+        );
+      }
+      try {
+        const frame = new rtc.AudioFrame(
+          samples,
+          sampleRate,
+          channels,
+          samples.length / channels
+        );
+        await source.captureFrame(frame);
+      } catch (error) {
+        throw new MusicBotError(
+          MUSIC_BOT_ERROR.PUBLISH_FAILED,
+          "音频推送失败",
+          { cause: error }
+        );
+      }
+    },
+
+    /**
+     * 等待队列中剩余音频播放完成。失败转换为稳定 MusicBotError。
+     */
+    async waitForPlayout() {
+      if (closed || !source) return;
+      try {
+        await source.waitForPlayout();
+      } catch (error) {
+        throw new MusicBotError(
+          MUSIC_BOT_ERROR.PUBLISH_FAILED,
+          "等待音频播放完成失败",
+          { cause: error }
+        );
+      }
+    },
+
+    close,
   };
 }

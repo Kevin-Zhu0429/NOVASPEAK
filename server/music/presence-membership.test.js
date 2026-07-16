@@ -131,3 +131,52 @@ test("离线用户与非法参数拒绝", () => {
   assert.equal(service.isUserInChannel(null, "cs2"), false);
   service.close();
 });
+
+// ---------- hasUsersInChannel（音乐机器人听众判定）----------
+
+test("hasUsersInChannel：in_channel 为 true", () => {
+  const service = createService();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, memberUser("listener-1"));
+  setLocation(connection, "in_channel", "cs2");
+  assert.equal(service.hasUsersInChannel("cs2"), true);
+  service.close();
+});
+
+test("hasUsersInChannel：lobby 不算听众", () => {
+  const service = createService();
+  service.addConnection(new FakeConnection(), {}, memberUser("listener-2"));
+  assert.equal(service.hasUsersInChannel("cs2"), false);
+  service.close();
+});
+
+test("hasUsersInChannel：reconnecting 不算稳定听众", () => {
+  const service = createService();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, memberUser("listener-3"));
+  setLocation(connection, "reconnecting", "cs2");
+  assert.equal(service.hasUsersInChannel("cs2"), false);
+  service.close();
+});
+
+test("hasUsersInChannel：其他频道不算", () => {
+  const service = createService();
+  const connection = new FakeConnection();
+  service.addConnection(connection, {}, memberUser("listener-4"));
+  setLocation(connection, "in_channel", "apex");
+  assert.equal(service.hasUsersInChannel("cs2"), false);
+  service.close();
+});
+
+test("hasUsersInChannel：多标签页一个命中即可；非法参数 false", () => {
+  const service = createService();
+  const lobbyTab = new FakeConnection();
+  const channelTab = new FakeConnection();
+  service.addConnection(lobbyTab, {}, memberUser("listener-5"));
+  service.addConnection(channelTab, {}, memberUser("listener-5"));
+  setLocation(channelTab, "in_channel", "cs2");
+  assert.equal(service.hasUsersInChannel("cs2"), true);
+  assert.equal(service.hasUsersInChannel(""), false);
+  assert.equal(service.hasUsersInChannel(null), false);
+  service.close();
+});
