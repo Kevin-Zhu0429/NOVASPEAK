@@ -47,6 +47,7 @@ import {
 } from "./channels.js";
 import { createNeteaseClient } from "./music/netease-client.js";
 import { createNeteaseMusicRouter } from "./music/routes.js";
+import { createMusicBotManager } from "./music/music-bot-manager.js";
 import { removeQueueDataForPrincipal } from "./music/music-queue.js";
 
 dotenv.config();
@@ -141,6 +142,10 @@ const avatarService = createAvatarService({
   db,
   avatarsDirectory,
 });
+
+const neteaseClient = createNeteaseClient();
+const musicBotManager = createMusicBotManager({ db, neteaseClient, presenceService: presence });
+try { musicBotManager.recoverInterrupted(); } catch (error) { console.error("Music queue recovery failed:", error?.message || "unknown error"); }
 
 const voiceManagement = createVoiceManagementService({
   roomService,
@@ -1585,9 +1590,10 @@ app.use(
   "/api/music/netease",
   createNeteaseMusicRouter({
     db,
-    neteaseClient: createNeteaseClient(),
+    neteaseClient,
     requireAuthenticated,
     presenceService: presence,
+    musicBotManager,
   })
 );
 
@@ -1625,6 +1631,13 @@ server.on("upgrade", (req, socket, head) => {
 
 server.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
+  musicBotManager.start();
+});
+
+server.on("close", () => {
+  musicBotManager.stop().catch((error) => {
+    console.error("Music bot manager shutdown failed:", error?.message || "unknown error");
+  });
 });
 
 // 供后端测试直接访问真实路由（生产行为不变）

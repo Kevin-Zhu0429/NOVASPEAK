@@ -86,12 +86,13 @@ export default function MusicQueue({ apiBase, channelId }) {
     <div className="music-queue-section">
       {nowPlaying && (
         <div className="music-queue-now-playing">
-          <span className="music-queue-now-label">正在播放</span>
+          <QueueCover picUrl={nowPlaying.song.album?.picUrl} />
+          <span className="music-queue-now-label">音乐机器人正在播放</span>
           <QueueSong item={nowPlaying} />
         </div>
       )}
 
-      {items.length === 0 && !error ? (
+      {items.length === 0 && !nowPlaying && !error ? (
         <div className="music-panel-empty">频道队列还是空的</div>
       ) : (
         <ul className="music-queue-list">

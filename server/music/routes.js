@@ -67,6 +67,7 @@ export function createNeteaseMusicRouter({
   requireAuthenticated,
   presenceService = null,
   env = process.env,
+  musicBotManager = null,
 }) {
   const router = express.Router();
 
@@ -321,6 +322,8 @@ export function createNeteaseMusicRouter({
         const queueItemId = result.queueItemIds[0];
         const projected = snapshot.items.find((item) => item.id === queueItemId);
 
+        musicBotManager?.kick?.(req.params.channelId);
+
         return res.json({
           success: true,
           addedCount: result.addedCount,
@@ -392,6 +395,8 @@ export function createNeteaseMusicRouter({
           tracks: scan.tracks,
           playlistId,
         });
+
+        musicBotManager?.kick?.(req.params.channelId);
 
         return res.json({
           success: true,
