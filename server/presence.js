@@ -328,6 +328,16 @@ export function createPresenceService(options = {}) {
   // 多标签页只要有一个连接命中即可；in_channel 允许，
   // reconnecting 且频道一致时允许短暂访问；lobby / 其他频道 / 离线返回 false。
   // 不修改任何 Presence 状态或协议。
+  function hasUsersInChannel(channelId) {
+    if (typeof channelId !== "string" || !channelId || channelId === "lobby") return false;
+    for (const principal of principals.values()) {
+      for (const state of principal.connections.values()) {
+        if (state.state === "in_channel" && state.channelId === channelId) return true;
+      }
+    }
+    return false;
+  }
+
   function isUserInChannel(userId, channelId) {
     if (typeof userId !== "string" || !userId) return false;
     if (typeof channelId !== "string" || !channelId) return false;
@@ -591,6 +601,7 @@ export function createPresenceService(options = {}) {
     sendCommandToChannelConnection,
     sendVoiceControlToParticipant,
     isUserInChannel,
+    hasUsersInChannel,
     setConnectionLocation,
     broadcastAnnouncement,
     beginParticipantMove,

@@ -218,3 +218,51 @@ export async function playTestToneInChannel({
     identity: getMusicBotIdentity(channelId),
   };
 }
+
+export function createMusicBotAudioSession({ channelId, env = process.env, loadRtc = defaultLoadRtc, token = null } = {}) {
+  if (typeof channelId !== "string" || !channelId.trim()) {
+    throw new MusicBotError(MUSIC_BOT_ERROR.NOT_CONFIGURED, "缺少有效的 channelId");
+  }
+  const identity = getMusicBotIdentity(channelId);
+  let room = null;
+  let source = null;
+  let publication = null;
+  let rtc = null;
+  let connected = false;
+  let closing = false;
+  async function cleanup() {
+    if (publication && room?.localParticipant) {
+      try { await room.localParticipant.unpublishTrack(publication.sid, true); } catch {}
+      publication = null;
+    }
+    if (source) { try { await source.close(); } catch {} source = null; }
+    if (room) { try { await room.disconnect(); } catch {} room = null; }
+    connected = false;
+  }
+  return {
+    identity,
+    async connect() {
+      if (connected) return;
+      const { url } = readLiveKitEnv(env);
+      const botToken = token || (await buildMusicBotToken(channelId, env));
+      try { rtc = await loadRtc(); } catch { throw new MusicBotError(MUSIC_BOT_ERROR.RTC_UNAVAILABLE, "无法加载 @livekit/rtc-node 原生模块"); }
+      room = new rtc.Room();
+      try { await room.connect(url, botToken, { autoSubscribe: false }); }
+      catch { throw new MusicBotError(MUSIC_BOT_ERROR.CONNECT_FAILED, "连接 LiveKit 频道失败"); }
+      try {
+        source = new rtc.AudioSource(48000, 1, 200);
+        const track = rtc.LocalAudioTrack.createAudioTrack("music-bot-audio", source);
+        const publishOptions = new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE });
+        publication = await room.localParticipant.publishTrack(track, publishOptions);
+      } catch { await cleanup(); throw new MusicBotError(MUSIC_BOT_ERROR.PUBLISH_FAILED, "发布音乐音轨失败"); }
+      connected = true;
+    },
+    async capturePcmFrame(samples) {
+      if (!connected || !source || !rtc) throw new MusicBotError(MUSIC_BOT_ERROR.PUBLISH_FAILED, "音乐机器人未连接");
+      const frame = new rtc.AudioFrame(samples, 48000, 1, 480);
+      await source.captureFrame(frame);
+    },
+    async waitForPlayout() { if (source) await source.waitForPlayout(); },
+    async close() { if (closing) return; closing = true; await cleanup(); },
+  };
+}
