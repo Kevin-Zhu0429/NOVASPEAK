@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ListMusic } from "lucide-react";
-import { getNeteasePlaylistTracks } from "../../utils/music-api";
+import { ArrowLeft, ListMusic, ListPlus, Music, Plus } from "lucide-react";
+import {
+  enqueueNeteasePlaylist,
+  enqueueNeteaseTrack,
+  getNeteasePlaylistTracks,
+} from "../../utils/music-api";
 import { formatArtists, formatTrackDuration } from "../../utils/music-format";
 
 const PAGE_SIZE = 50;
@@ -12,14 +16,18 @@ function isSessionInvalidError(error) {
   );
 }
 
-// 单个歌单的歌曲列表（分页）。
-export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInvalid }) {
+// 单个歌单的歌曲列表（分页 + 点歌）。
+// 点歌只提交 playlistId/songId/绝对 trackIndex，元数据由服务端决定。
+export default function PlaylistTracks({ apiBase, channelId, playlist, onBack, onSessionInvalid }) {
   const [items, setItems] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [coverFailed, setCoverFailed] = useState(false);
+  const [enqueueBusyId, setEnqueueBusyId] = useState("");
+  const [playlistBusy, setPlaylistBusy] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -80,6 +88,66 @@ export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInv
     }
   };
 
+  // trackIndex 是 items 数组中的绝对位置（分页从 offset 0 顺序累加）
+  const enqueueTrack = async (track, trackIndex) => {
+    if (enqueueBusyId || !track.playable) return;
+    setEnqueueBusyId(track.id);
+    setError("");
+    setFeedback("");
+    try {
+      const result = await enqueueNeteaseTrack(apiBase, channelId, {
+        playlistId: playlist.id,
+        songId: track.id,
+        trackIndex,
+      });
+      if (!mountedRef.current) return;
+      setFeedback(
+        result.projectedPosition
+          ? `已添加「${track.name}」，预计第 ${result.projectedPosition} 位播放`
+          : `已添加「${track.name}」`
+      );
+    } catch (enqueueError) {
+      if (!mountedRef.current) return;
+      if (isSessionInvalidError(enqueueError)) {
+        onSessionInvalid?.();
+        return;
+      }
+      setError(enqueueError.message || "点歌失败");
+    } finally {
+      if (mountedRef.current) setEnqueueBusyId("");
+    }
+  };
+
+  const enqueuePlaylist = async () => {
+    if (playlistBusy) return;
+    setPlaylistBusy(true);
+    setError("");
+    setFeedback("");
+    try {
+      const result = await enqueueNeteasePlaylist(apiBase, channelId, {
+        playlistId: playlist.id,
+      });
+      if (!mountedRef.current) return;
+      const parts = [`已添加 ${result.addedCount} 首`];
+      if (result.skippedUnavailableCount > 0) {
+        parts.push(`跳过 ${result.skippedUnavailableCount} 首不可用歌曲`);
+      }
+      if (result.truncated) {
+        parts.push("因队列上限截断");
+      }
+      setFeedback(parts.join("，"));
+    } catch (enqueueError) {
+      if (!mountedRef.current) return;
+      if (isSessionInvalidError(enqueueError)) {
+        onSessionInvalid?.();
+        return;
+      }
+      setError(enqueueError.message || "添加歌单失败");
+    } finally {
+      if (mountedRef.current) setPlaylistBusy(false);
+    }
+  };
+
   return (
     <div className="music-tracks-section">
       <div className="music-tracks-header">
@@ -105,7 +173,19 @@ export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInv
           </span>
         )}
         <strong className="music-tracks-title">{playlist.name}</strong>
+        <button
+          type="button"
+          className="music-enqueue-playlist-button"
+          onClick={enqueuePlaylist}
+          disabled={playlistBusy || loading}
+          aria-label="添加整个歌单到频道队列"
+        >
+          <ListPlus />
+          {playlistBusy ? "添加中……" : "添加整个歌单"}
+        </button>
       </div>
+
+      {feedback && <div className="music-panel-feedback">{feedback}</div>}
 
       {loading ? (
         <div className="music-panel-loading">正在加载歌曲……</div>
@@ -113,11 +193,12 @@ export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInv
         <div className="music-panel-empty">这个歌单还没有歌曲</div>
       ) : (
         <ul className="music-track-list">
-          {items.map((track) => (
+          {items.map((track, index) => (
             <li
               key={track.id}
               className={track.playable ? "music-track" : "music-track music-track-unavailable"}
             >
+              <TrackCover picUrl={track.album?.picUrl} unavailable={!track.playable} />
               <span className="music-track-main">
                 <strong className="music-track-name">{track.name}</strong>
                 <span className="music-track-meta">
@@ -131,6 +212,17 @@ export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInv
               <span className="music-track-duration">
                 {formatTrackDuration(track.durationMs)}
               </span>
+              <button
+                type="button"
+                className="music-enqueue-button"
+                onClick={() => enqueueTrack(track, index)}
+                disabled={!track.playable || Boolean(enqueueBusyId)}
+                aria-label={`点歌 ${track.name}`}
+                title={track.playable ? "添加到频道队列" : track.unavailableReason || "不可用"}
+              >
+                <Plus />
+                {enqueueBusyId === track.id ? "添加中" : "点歌"}
+              </button>
             </li>
           ))}
         </ul>
@@ -149,5 +241,29 @@ export default function PlaylistTracks({ apiBase, playlist, onBack, onSessionInv
         </button>
       )}
     </div>
+  );
+}
+
+function TrackCover({ picUrl, unavailable }) {
+  const [failed, setFailed] = useState(false);
+  const className = unavailable
+    ? "music-cover music-cover-small music-track-cover-dim"
+    : "music-cover music-cover-small";
+  if (!picUrl || failed) {
+    return (
+      <span className={`${className} music-cover-fallback`} aria-hidden="true">
+        <Music />
+      </span>
+    );
+  }
+  return (
+    <img
+      className={className}
+      src={picUrl}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
   );
 }

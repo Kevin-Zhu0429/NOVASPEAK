@@ -47,6 +47,7 @@ import {
 } from "./channels.js";
 import { createNeteaseClient } from "./music/netease-client.js";
 import { createNeteaseMusicRouter } from "./music/routes.js";
+import { removeQueueDataForPrincipal } from "./music/music-queue.js";
 
 dotenv.config();
 
@@ -1501,6 +1502,7 @@ app.delete("/api/admin/members/:memberId",
         db.prepare(`
           DELETE FROM netease_accounts WHERE principal_key = ?
         `).run(member.id);
+        removeQueueDataForPrincipal(db, member.id);
         db.prepare(`
           DELETE FROM users WHERE id = ?
         `).run(member.id);
@@ -1578,13 +1580,14 @@ app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) 
   }
 });
 
-// 网易云音乐机器人：账号绑定接口（必须注册在 /api 404 fallback 之前）
+// 网易云音乐机器人：账号绑定与频道队列接口（必须注册在 /api 404 fallback 之前）
 app.use(
   "/api/music/netease",
   createNeteaseMusicRouter({
     db,
     neteaseClient: createNeteaseClient(),
     requireAuthenticated,
+    presenceService: presence,
   })
 );
 

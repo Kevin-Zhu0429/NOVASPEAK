@@ -8,6 +8,10 @@ import {
   backupBeforeNeteaseMigration,
   migrateNeteaseAccounts,
 } from "./music/migrate.js";
+import {
+  backupBeforeMusicQueueMigration,
+  migrateMusicQueue,
+} from "./music/queue-migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -188,6 +192,18 @@ if (neteaseBackup.backedUp) {
   );
 }
 migrateNeteaseAccounts(db);
+
+// 频道音乐队列表：首次迁移前同样先在线备份，失败则启动失败
+const musicQueueBackup = await backupBeforeMusicQueueMigration(db, {
+  databasePath,
+  preExistingDatabase,
+});
+if (musicQueueBackup.backedUp) {
+  console.log(
+    `Database backup created before music queue migration: ${musicQueueBackup.backupPath}`
+  );
+}
+migrateMusicQueue(db);
 
 console.log(`SQLite database ready: ${databasePath}`);
 

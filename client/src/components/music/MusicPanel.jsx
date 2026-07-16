@@ -7,11 +7,13 @@ import {
 } from "../../utils/music-api";
 import PlaylistList from "./PlaylistList";
 import PlaylistTracks from "./PlaylistTracks";
+import MusicQueue from "./MusicQueue";
 
-// 网易云音乐面板（第 4 阶段：账号绑定 + 歌单浏览）。
+// 网易云音乐面板（5A：账号绑定 + 歌单浏览 + 频道队列）。
 // Cookie 只在 loginNetease() 返回值 → bindNeteaseSession() 请求体之间
 // 一次性传递：不进 state、不进 ref、不写 localStorage/sessionStorage。
-export default function MusicPanel({ apiBase, onClose }) {
+export default function MusicPanel({ apiBase, channelId, onClose }) {
+  const [activeTab, setActiveTab] = useState("library");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -131,7 +133,33 @@ export default function MusicPanel({ apiBase, onClose }) {
         </button>
       </div>
 
-      {loading ? (
+      <div className="music-panel-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "library"}
+          className={activeTab === "library" ? "music-tab music-tab-active" : "music-tab"}
+          onClick={() => setActiveTab("library")}
+        >
+          我的音乐
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "queue"}
+          className={activeTab === "queue" ? "music-tab music-tab-active" : "music-tab"}
+          onClick={() => setActiveTab("queue")}
+        >
+          频道队列
+        </button>
+      </div>
+
+      {activeTab === "queue" ? (
+        // 频道队列：未绑定网易云账号也可以查看
+        <div className="music-panel-body">
+          <MusicQueue apiBase={apiBase} channelId={channelId} />
+        </div>
+      ) : loading ? (
         <div className="music-panel-loading">正在加载绑定状态……</div>
       ) : account ? (
         <>
@@ -185,6 +213,7 @@ export default function MusicPanel({ apiBase, onClose }) {
               <PlaylistTracks
                 key={`${libraryRevision}-${activePlaylist.id}`}
                 apiBase={apiBase}
+                channelId={channelId}
                 playlist={activePlaylist}
                 onBack={() => setActivePlaylist(null)}
                 onSessionInvalid={handleSessionInvalid}

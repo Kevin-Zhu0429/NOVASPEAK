@@ -2034,6 +2034,29 @@ input {
 .music-load-more:hover:not(:disabled) { border-color: rgba(45, 212, 191, .5); }
 .music-session-expired { display: grid; gap: 12px; padding: 14px 0; justify-items: center; }
 .music-session-expired p { margin: 0; color: #fbbf24; font-size: 13px; }
+.music-panel-tabs { display: flex; gap: 6px; }
+.music-tab { flex: 1; padding: 8px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 10px; color: #94a3b8; background: transparent; font-size: 12px; }
+.music-tab:hover { border-color: rgba(45, 212, 191, .4); color: #ccfbf1; }
+.music-tab-active { border-color: rgba(45, 212, 191, .5); color: #2dd4bf; background: rgba(19, 78, 74, .35); }
+.music-panel-feedback { padding: 8px 11px; border: 1px solid rgba(45, 212, 191, .3); border-radius: 10px; color: #99f6e4; background: rgba(19, 78, 74, .3); font-size: 12px; line-height: 1.6; }
+.music-enqueue-playlist-button { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 7px 10px; border: 1px solid rgba(45, 212, 191, .4); border-radius: 10px; color: #ccfbf1; background: #134e4a; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.music-enqueue-playlist-button svg { width: 15px; }
+.music-enqueue-playlist-button:hover:not(:disabled) { background: #0f766e; }
+.music-enqueue-button { display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; border: 1px solid rgba(45, 212, 191, .35); border-radius: 9px; color: #ccfbf1; background: #12352f; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.music-enqueue-button svg { width: 14px; }
+.music-enqueue-button:hover:not(:disabled) { background: #134e4a; }
+.music-track-cover-dim { opacity: .5; }
+.music-queue-section { display: grid; gap: 10px; }
+.music-queue-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.music-queue-item { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid rgba(148, 163, 184, .1); border-radius: 10px; background: rgba(15, 23, 42, .45); }
+.music-queue-item-mine { border-color: rgba(45, 212, 191, .35); }
+.music-queue-position { min-width: 22px; color: #2dd4bf; font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; flex-shrink: 0; }
+.music-queue-requester { color: #64748b; font-size: 11px; }
+.music-queue-cancel-button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 8px; color: #94a3b8; background: transparent; flex-shrink: 0; }
+.music-queue-cancel-button:hover:not(:disabled) { color: #fecaca; border-color: rgba(248, 113, 113, .5); }
+.music-queue-cancel-button svg { width: 14px; }
+.music-queue-now-playing { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid rgba(45, 212, 191, .4); border-radius: 11px; background: rgba(19, 78, 74, .35); }
+.music-queue-now-label { color: #2dd4bf; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
 .music-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .music-panel-title { display: inline-flex; align-items: center; gap: 8px; color: #ccfbf1; font-size: 14px; font-weight: 600; }
 .music-panel-title svg { width: 18px; color: #2dd4bf; }

@@ -45,6 +45,7 @@ const { createNeteaseClient, NETEASE_ERROR, NeteaseError } = await import(
   "./netease-client.js"
 );
 const { createNeteaseMusicRouter } = await import("./routes.js");
+const { enqueueTracks } = await import("./music-queue.js");
 
 if (!server.listening) {
   await once(server, "listening");
@@ -267,7 +268,12 @@ test("A 用户看不到 B 用户的绑定，删除也只影响自己", async () 
     cookie: memberACookie,
   });
   assert.equal(aDelete.status, 200);
-  assert.deepEqual(aDelete.json, { success: true, bound: false, removed: true });
+  assert.deepEqual(aDelete.json, {
+    success: true,
+    bound: false,
+    removed: true,
+    cancelledPending: 0,
+  });
 
   // A 已解绑，B 不受影响
   const aView = await api("GET", "/api/music/netease/account", {
@@ -358,6 +364,28 @@ test("删除正式成员时其网易云凭据在同一事务中一并删除", as
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   });
 
+  // 同时为两人各写入队列数据（lobby 是 db.js 种子频道）
+  const queueTrack = (songId) => ({
+    id: songId,
+    name: "队列歌曲",
+    artists: [],
+    album: null,
+    durationMs: 1000,
+    fee: 0,
+  });
+  enqueueTracks(importedDb, {
+    channelId: "lobby",
+    principalKey: "doomed-member",
+    requesterDisplayName: "将删除",
+    tracks: [queueTrack("81"), queueTrack("82")],
+  });
+  enqueueTracks(importedDb, {
+    channelId: "lobby",
+    principalKey: "keep-member",
+    requesterDisplayName: "保留",
+    tracks: [queueTrack("83")],
+  });
+
   const result = await api("DELETE", "/api/admin/members/doomed-member", {
     cookie: adminCookie,
   });
@@ -378,12 +406,18 @@ test("删除正式成员时其网易云凭据在同一事务中一并删除", as
     0
   );
 
+  // 队列项与用户桶同事务清理
+  assert.equal(countIn("music_queue_items", "principal_key", "doomed-member"), 0);
+  assert.equal(countIn("music_queue_buckets", "principal_key", "doomed-member"), 0);
+
   // 其他正式成员和访客的绑定不受影响
   assert.equal(countIn("netease_accounts", "principal_key", "keep-member"), 1);
   assert.equal(
     countIn("netease_accounts", "principal_key", guestKeepKey),
     1
   );
+  assert.equal(countIn("music_queue_items", "principal_key", "keep-member"), 1);
+  assert.equal(countIn("music_queue_buckets", "principal_key", "keep-member"), 1);
 
   // 没有绑定的成员删除同样幂等成功
   insertUser.run("unbound-member", "UNBOUND", "unbound", "UNBOUND", "test-hash", "member", "member", nowTs);

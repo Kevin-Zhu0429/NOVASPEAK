@@ -137,3 +137,93 @@ export async function getNeteasePlaylistTracks(
     { fetchImpl, fallbackError: "获取歌单歌曲失败" }
   );
 }
+
+function requireChannelId(channelId) {
+  if (typeof channelId !== "string" || !channelId.trim()) {
+    throw new Error("频道无效");
+  }
+  return encodeURIComponent(channelId.trim());
+}
+
+/**
+ * 获取当前频道的共享音乐队列（按预计公平播放顺序）。
+ */
+export async function getChannelMusicQueue(
+  apiBase,
+  channelId,
+  { signal, fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue`,
+    { method: "GET", signal },
+    { fetchImpl, fallbackError: "获取频道队列失败" }
+  );
+}
+
+/**
+ * 单曲点歌：只提交 playlistId/songId/trackIndex，
+ * 歌曲元数据由服务端从网易云取回，不提交任何展示数据。
+ */
+export async function enqueueNeteaseTrack(
+  apiBase,
+  channelId,
+  { playlistId, songId, trackIndex },
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/tracks`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playlistId, songId, trackIndex }),
+    },
+    { fetchImpl, fallbackError: "点歌失败" }
+  );
+}
+
+/**
+ * 把整个歌单添加到频道队列（服务端只加入可播放歌曲）。
+ */
+export async function enqueueNeteasePlaylist(
+  apiBase,
+  channelId,
+  { playlistId },
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/playlists`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playlistId }),
+    },
+    { fetchImpl, fallbackError: "添加歌单失败" }
+  );
+}
+
+/**
+ * 取消一个待播放队列项（本人或管理员）。
+ */
+export async function cancelMusicQueueItem(
+  apiBase,
+  channelId,
+  queueItemId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  if (typeof queueItemId !== "string" || !queueItemId.trim()) {
+    throw new Error("队列项无效");
+  }
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/${encodeURIComponent(queueItemId.trim())}`,
+    { method: "DELETE" },
+    { fetchImpl, fallbackError: "取消歌曲失败" }
+  );
+}

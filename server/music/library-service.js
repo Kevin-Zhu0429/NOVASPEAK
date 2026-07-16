@@ -15,6 +15,8 @@ export const MUSIC_LIBRARY_ERROR = Object.freeze({
   NOT_BOUND: "NETEASE_ACCOUNT_NOT_BOUND",
   CREDENTIAL_UNREADABLE: "NETEASE_CREDENTIAL_UNREADABLE",
   PLAYLIST_NOT_FOUND: "NETEASE_PLAYLIST_NOT_FOUND",
+  TRACK_NOT_FOUND: "MUSIC_TRACK_NOT_FOUND",
+  TRACK_UNAVAILABLE: "MUSIC_TRACK_UNAVAILABLE",
 });
 
 export class MusicLibraryError extends Error {
@@ -192,5 +194,146 @@ export async function listPlaylistTracksPage({
     },
     tracks,
     pagination: { limit, offset, more, total },
+  };
+}
+
+function buildPrivilegeMap(privileges) {
+  const map = new Map();
+  for (const privilege of privileges) {
+    const id = toIdString(privilege?.id);
+    if (id) map.set(id, privilege);
+  }
+  return map;
+}
+
+/**
+ * 点歌验证：归属验证后按 trackIndex 精确取该位置歌曲，
+ * 服务端标准化并核对 songId 完全一致——前端提交的展示元数据一律不可信。
+ */
+export async function getVerifiedPlaylistTrack({
+  db,
+  principalKey,
+  neteaseClient,
+  playlistId,
+  songId,
+  trackIndex,
+  env = process.env,
+}) {
+  const { cookie, neteaseUserId } = loadNeteaseCredential(db, principalKey, env);
+
+  const ownedPlaylist = await findOwnedPlaylist({
+    neteaseClient,
+    neteaseUserId,
+    cookie,
+    playlistId,
+  });
+  if (!ownedPlaylist) {
+    throw new MusicLibraryError(
+      MUSIC_LIBRARY_ERROR.PLAYLIST_NOT_FOUND,
+      "未找到该歌单",
+      404
+    );
+  }
+
+  const { songs, privileges } = await neteaseClient.listPlaylistTracks({
+    playlistId,
+    cookie,
+    limit: 1,
+    offset: trackIndex,
+  });
+
+  const privilegeMap = buildPrivilegeMap(privileges);
+  const track = songs.length
+    ? normalizeTrack(songs[0], privilegeMap.get(toIdString(songs[0]?.id)))
+    : null;
+
+  if (!track || track.id !== songId) {
+    throw new MusicLibraryError(
+      MUSIC_LIBRARY_ERROR.TRACK_NOT_FOUND,
+      "歌曲与歌单位置不匹配，请刷新歌单后重试",
+      404
+    );
+  }
+
+  return { track, playlist: ownedPlaylist };
+}
+
+// 整歌单添加时最多扫描的歌曲数量
+const PLAYLIST_ENQUEUE_MAX_SCAN = 1000;
+const PLAYLIST_SCAN_PAGE_SIZE = 100;
+
+/**
+ * 收集歌单中可播放的歌曲（用于整歌单添加）：
+ * 归属验证 → 分页扫描（上限 PLAYLIST_ENQUEUE_MAX_SCAN）→
+ * 只收集 playable 歌曲直到 maxTracks，其余不可用歌曲计数跳过。
+ * 不请求播放 URL。
+ */
+export async function getPlayableTracksForPlaylist({
+  db,
+  principalKey,
+  neteaseClient,
+  playlistId,
+  maxTracks,
+  env = process.env,
+}) {
+  const { cookie, neteaseUserId } = loadNeteaseCredential(db, principalKey, env);
+
+  const ownedPlaylist = await findOwnedPlaylist({
+    neteaseClient,
+    neteaseUserId,
+    cookie,
+    playlistId,
+  });
+  if (!ownedPlaylist) {
+    throw new MusicLibraryError(
+      MUSIC_LIBRARY_ERROR.PLAYLIST_NOT_FOUND,
+      "未找到该歌单",
+      404
+    );
+  }
+
+  const trackCount = ownedPlaylist.trackCount ?? PLAYLIST_ENQUEUE_MAX_SCAN;
+  const scanLimit = Math.min(PLAYLIST_ENQUEUE_MAX_SCAN, trackCount);
+
+  const collected = [];
+  let skippedUnavailableCount = 0;
+  let truncated = trackCount > PLAYLIST_ENQUEUE_MAX_SCAN;
+
+  outer: for (let offset = 0; offset < scanLimit; offset += PLAYLIST_SCAN_PAGE_SIZE) {
+    const limit = Math.min(PLAYLIST_SCAN_PAGE_SIZE, scanLimit - offset);
+    const { songs, privileges } = await neteaseClient.listPlaylistTracks({
+      playlistId,
+      cookie,
+      limit,
+      offset,
+    });
+    if (songs.length === 0) break;
+
+    const privilegeMap = buildPrivilegeMap(privileges);
+    for (let index = 0; index < songs.length; index += 1) {
+      const track = normalizeTrack(
+        songs[index],
+        privilegeMap.get(toIdString(songs[index]?.id))
+      );
+      if (!track) continue;
+      if (!track.playable) {
+        skippedUnavailableCount += 1;
+        continue;
+      }
+      if (collected.length >= maxTracks) {
+        truncated = true;
+        break outer;
+      }
+      collected.push({ ...track, trackIndex: offset + index });
+    }
+
+    if (songs.length < limit) break;
+  }
+
+  return {
+    playlist: ownedPlaylist,
+    tracks: collected,
+    skippedUnavailableCount,
+    truncated,
   };
 }
