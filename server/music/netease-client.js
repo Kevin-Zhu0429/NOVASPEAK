@@ -13,6 +13,15 @@ export const NETEASE_ERROR = Object.freeze({
   RATE_LIMITED: "NETEASE_RATE_LIMITED",
 });
 
+export const NETEASE_PLAYBACK_ERROR = Object.freeze({
+  SESSION_INVALID: "NETEASE_PLAYBACK_SESSION_INVALID",
+  URL_UNAVAILABLE: "NETEASE_PLAYBACK_URL_UNAVAILABLE",
+  TRIAL_ONLY: "NETEASE_PLAYBACK_TRIAL_ONLY",
+  RATE_LIMITED: "NETEASE_PLAYBACK_RATE_LIMITED",
+  RESPONSE_INVALID: "NETEASE_PLAYBACK_RESPONSE_INVALID",
+  REQUEST_FAILED: "NETEASE_PLAYBACK_REQUEST_FAILED",
+});
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export class NeteaseError extends Error {
@@ -123,6 +132,62 @@ export function createNeteaseClient({
     }
   }
 
+  // 上游 reject（{status, body} 结构）→ 播放专用稳定错误
+  function mapPlaybackUpstreamError(error) {
+    if (error instanceof NeteaseError) {
+      // withTimeout 等内部错误按请求失败处理
+      return new NeteaseError(
+        NETEASE_PLAYBACK_ERROR.REQUEST_FAILED,
+        "获取播放地址失败，请稍后再试"
+      );
+    }
+    const status = Number(error?.status ?? error?.body?.code ?? 0);
+    if (status === 429) {
+      return new NeteaseError(
+        NETEASE_PLAYBACK_ERROR.RATE_LIMITED,
+        "网易云请求过于频繁，请稍后再试"
+      );
+    }
+    if (status === 301 || status === 302 || status === 401) {
+      return new NeteaseError(
+        NETEASE_PLAYBACK_ERROR.SESSION_INVALID,
+        "网易云登录已失效，请重新登录"
+      );
+    }
+    return new NeteaseError(
+      NETEASE_PLAYBACK_ERROR.REQUEST_FAILED,
+      "获取播放地址失败，请稍后再试"
+    );
+  }
+
+  // 上游 reject 是否是带 HTTP 语义的明确拒绝（而非库兼容性异常）
+  function isUpstreamRejection(error) {
+    return (
+      Number.isFinite(Number(error?.status)) && Number(error?.status) > 0
+    ) || Number.isFinite(Number(error?.body?.code));
+  }
+
+  // 提取单曲播放条目并做完整校验；结构无效抛 RESPONSE_INVALID
+  function extractPlaybackEntry(response, songId) {
+    const body = response?.body;
+    if (!body || body.code !== 200 || !Array.isArray(body.data)) {
+      throw new NeteaseError(
+        NETEASE_PLAYBACK_ERROR.RESPONSE_INVALID,
+        "网易云返回了无效的播放数据"
+      );
+    }
+    const entry = body.data.find(
+      (item) => item && String(item.id) === songId
+    );
+    if (!entry || typeof entry !== "object") {
+      throw new NeteaseError(
+        NETEASE_PLAYBACK_ERROR.RESPONSE_INVALID,
+        "网易云返回了无效的播放数据"
+      );
+    }
+    return entry;
+  }
+
   async function callApi(method, params) {
     try {
       return await withTimeout(getApi()[method](params), timeoutMs);
@@ -196,6 +261,95 @@ export function createNeteaseClient({
         songs: body.songs,
         privileges: Array.isArray(body.privileges) ? body.privileges : [],
       };
+    },
+
+    /**
+     * 获取单曲完整播放地址（点歌者自己的 Cookie）。
+     *
+     * 优先 song_url_v1(level: standard)；只有在 v1 方法不存在、
+     * 发生库兼容性异常或响应结构明显无效时才降级 song_url(br: 128000)。
+     * 明确的无版权 / 无权限 / 试听限制 / 登录失效 / 限流一律直接抛出，
+     * 绝不用旧接口绕过。
+     *
+     * URL 只在调用方的播放函数作用域中短暂存在：
+     * 不写数据库、不返回前端、不写日志。
+     */
+    async getSongPlaybackUrl({ songId, cookie }) {
+      requireCookie(cookie);
+      if (typeof songId !== "string" || !/^\d{1,20}$/.test(songId)) {
+        throw new NeteaseError(
+          NETEASE_PLAYBACK_ERROR.RESPONSE_INVALID,
+          "歌曲编号无效"
+        );
+      }
+
+      const api = getApi();
+      let entry = null;
+      let shouldFallback = typeof api.song_url_v1 !== "function";
+
+      if (!shouldFallback) {
+        try {
+          const response = await withTimeout(
+            api.song_url_v1({ id: songId, level: "standard", cookie }),
+            timeoutMs
+          );
+          entry = extractPlaybackEntry(response, songId);
+        } catch (error) {
+          if (
+            error instanceof NeteaseError &&
+            error.code === NETEASE_PLAYBACK_ERROR.RESPONSE_INVALID
+          ) {
+            // v1 响应结构明显无效 → 允许降级旧接口
+            shouldFallback = true;
+          } else if (!isUpstreamRejection(error) && !(error instanceof NeteaseError)) {
+            // 库自身兼容性异常（非 HTTP 语义拒绝）→ 允许降级
+            shouldFallback = true;
+          } else {
+            throw mapPlaybackUpstreamError(error);
+          }
+        }
+      }
+
+      if (shouldFallback) {
+        try {
+          const response = await withTimeout(
+            api.song_url({ id: songId, br: 128000, cookie }),
+            timeoutMs
+          );
+          entry = extractPlaybackEntry(response, songId);
+        } catch (error) {
+          if (
+            error instanceof NeteaseError &&
+            error.code === NETEASE_PLAYBACK_ERROR.RESPONSE_INVALID
+          ) {
+            throw error;
+          }
+          throw mapPlaybackUpstreamError(error);
+        }
+      }
+
+      // 单曲级校验：试听、无权限、URL 为空都拒绝，不尝试其他音质
+      if (entry.freeTrialInfo) {
+        throw new NeteaseError(
+          NETEASE_PLAYBACK_ERROR.TRIAL_ONLY,
+          "该歌曲只有试听片段，无法完整播放"
+        );
+      }
+      const entryCode = Number(entry.code ?? 0);
+      if (entryCode !== 200) {
+        throw new NeteaseError(
+          NETEASE_PLAYBACK_ERROR.URL_UNAVAILABLE,
+          "当前账号无法播放该歌曲"
+        );
+      }
+      if (typeof entry.url !== "string" || !entry.url) {
+        throw new NeteaseError(
+          NETEASE_PLAYBACK_ERROR.URL_UNAVAILABLE,
+          "该歌曲暂无可用播放地址"
+        );
+      }
+
+      return { url: entry.url };
     },
 
     /**
