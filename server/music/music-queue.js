@@ -271,7 +271,6 @@ function toPublicQueueItem(row, viewer, projectedPosition) {
       isCurrentUser,
     },
     addedAt: row.added_at,
-    startedAt: row.started_at ?? null,
     canCancel:
       row.status === "pending" && (isCurrentUser || viewer.isAdmin === true),
   };
@@ -511,22 +510,5 @@ export function removeQueueDataForPrincipal(db, principalKey, now = Date.now()) 
     for (const { channelId } of channels) {
       bumpRevision(db, channelId, now);
     }
-  })();
-}
-
-export function listPendingMusicChannelIds(db) {
-  return db
-    .prepare("SELECT DISTINCT channel_id AS channelId FROM music_queue_items WHERE status = 'pending' ORDER BY channel_id")
-    .all()
-    .map((row) => row.channelId);
-}
-
-export function requeuePlayingQueueItem(db, { queueItemId, now = Date.now() }) {
-  return db.transaction(() => {
-    const row = db.prepare("SELECT id, channel_id, status FROM music_queue_items WHERE id = ?").get(queueItemId);
-    if (!row || row.status !== "playing") return { changed: false, revision: null };
-    db.prepare("UPDATE music_queue_items SET status = 'pending', started_at = NULL, failure_code = NULL WHERE id = ? AND status = 'playing'").run(row.id);
-    const revision = bumpRevision(db, row.channel_id, now);
-    return { changed: true, revision };
   })();
 }
