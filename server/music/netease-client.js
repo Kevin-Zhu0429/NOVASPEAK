@@ -11,10 +11,6 @@ export const NETEASE_ERROR = Object.freeze({
   SESSION_INVALID: "NETEASE_SESSION_INVALID",
   REQUEST_FAILED: "NETEASE_REQUEST_FAILED",
   RATE_LIMITED: "NETEASE_RATE_LIMITED",
-  PLAYBACK_SESSION_INVALID: "NETEASE_PLAYBACK_SESSION_INVALID",
-  PLAYBACK_URL_UNAVAILABLE: "NETEASE_PLAYBACK_URL_UNAVAILABLE",
-  PLAYBACK_TRIAL_ONLY: "NETEASE_PLAYBACK_TRIAL_ONLY",
-  PLAYBACK_RESPONSE_INVALID: "NETEASE_PLAYBACK_RESPONSE_INVALID",
 });
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -210,32 +206,6 @@ export function createNeteaseClient({
      *   avatarUrl: string | null }>}
      * @throws {NeteaseError}
      */
-    async getSongPlaybackUrl({ songId, cookie, level = "standard" }) {
-      requireCookie(cookie);
-      const id = typeof songId === "string" ? songId.trim() : String(songId ?? "");
-      if (!/^\d+$/.test(id)) {
-        throw new NeteaseError(NETEASE_ERROR.PLAYBACK_RESPONSE_INVALID, "歌曲编号无效");
-      }
-      const response = await callApi("song_url_v1", { id, level: "standard", cookie });
-      const body = response?.body;
-      if (!body || (body.code !== 200 && body.code !== "200") || !Array.isArray(body.data)) {
-        const code = Number(body?.code ?? 0);
-        if (code === 301 || code === 302 || code === 401) throw new NeteaseError(NETEASE_ERROR.PLAYBACK_SESSION_INVALID, "网易云登录已失效，请重新登录");
-        if (code === 429) throw new NeteaseError(NETEASE_ERROR.RATE_LIMITED, "网易云请求过于频繁，请稍后再试");
-        throw new NeteaseError(NETEASE_ERROR.PLAYBACK_RESPONSE_INVALID, "网易云播放地址响应无效");
-      }
-      const item = body.data.find((entry) => String(entry?.id) === id);
-      if (!item) throw new NeteaseError(NETEASE_ERROR.PLAYBACK_RESPONSE_INVALID, "网易云播放地址响应无效");
-      const code = Number(item.code ?? 0);
-      if (code === 301 || code === 302 || code === 401) throw new NeteaseError(NETEASE_ERROR.PLAYBACK_SESSION_INVALID, "网易云登录已失效，请重新登录");
-      if (code === 429) throw new NeteaseError(NETEASE_ERROR.RATE_LIMITED, "网易云请求过于频繁，请稍后再试");
-      if (item.freeTrialInfo) throw new NeteaseError(NETEASE_ERROR.PLAYBACK_TRIAL_ONLY, "该歌曲仅允许试听片段，已跳过");
-      if (code !== 200 || typeof item.url !== "string" || !item.url.trim()) {
-        throw new NeteaseError(NETEASE_ERROR.PLAYBACK_URL_UNAVAILABLE, "该歌曲当前无法播放，已跳过");
-      }
-      return { url: item.url.trim(), level, type: item.type || null, size: item.size || null };
-    },
-
     async verifySession(cookieHeader) {
       if (typeof cookieHeader !== "string" || !cookieHeader.trim()) {
         throw new NeteaseError(
