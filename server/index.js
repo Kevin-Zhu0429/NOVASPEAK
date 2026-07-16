@@ -45,6 +45,13 @@ import {
   reorderChannels,
   toPublicChannel,
 } from "./channels.js";
+import { createNeteaseClient } from "./music/netease-client.js";
+import { createNeteaseMusicRouter } from "./music/routes.js";
+import {
+  recoverInterruptedQueueItems,
+  removeQueueDataForPrincipal,
+} from "./music/music-queue.js";
+import { createMusicBotManager } from "./music/music-bot-manager.js";
 
 dotenv.config();
 
@@ -1497,6 +1504,10 @@ app.delete("/api/admin/members/:memberId",
           DELETE FROM user_positions WHERE user_id = ?
         `).run(member.id);
         db.prepare(`
+          DELETE FROM netease_accounts WHERE principal_key = ?
+        `).run(member.id);
+        removeQueueDataForPrincipal(db, member.id);
+        db.prepare(`
           DELETE FROM users WHERE id = ?
         `).run(member.id);
       });
@@ -1573,6 +1584,27 @@ app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) 
   }
 });
 
+// 网易云音乐机器人：router 与播放管理器共用同一 neteaseClient
+const neteaseClient = createNeteaseClient();
+const musicBotManager = createMusicBotManager({
+  db,
+  neteaseClient,
+  presenceService: presence,
+  env: process.env,
+});
+
+// 账号绑定与频道队列接口（必须注册在 /api 404 fallback 之前）
+app.use(
+  "/api/music/netease",
+  createNeteaseMusicRouter({
+    db,
+    neteaseClient,
+    requireAuthenticated,
+    presenceService: presence,
+    onQueueUpdated: (channelId) => musicBotManager.kick(channelId),
+  })
+);
+
 app.use("/api", (req, res) => {
   res.status(404).json({
     error: `API 不存在：${req.method} ${req.originalUrl}`,
@@ -1605,8 +1637,26 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
+// 启动恢复：上次异常退出留下的 playing 恢复 pending（可重复执行）
+try {
+  const recovered = recoverInterruptedQueueItems(db);
+  if (recovered > 0) {
+    console.log(`Music queue recovered ${recovered} interrupted item(s)`);
+  }
+} catch (error) {
+  console.error("Music queue recovery error:", error?.message);
+}
+
 server.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
+  musicBotManager.start();
+});
+
+// 关闭路径防重入由 manager.stop 自身保证；音乐模块绝不反向关闭 server
+server.on("close", () => {
+  musicBotManager.stop().catch((error) => {
+    console.error("Music bot manager stop error:", error?.message);
+  });
 });
 
 // 供后端测试直接访问真实路由（生产行为不变）

@@ -1,6 +1,6 @@
-import { Headphones, HeadphoneOff, LogOut, Mic, MicOff, Settings2 } from "lucide-react";
+import { Headphones, HeadphoneOff, LogOut, Mic, MicOff, Music, Settings2 } from "lucide-react";
 
-export default function VoiceControlBar({ microphoneEnabled, deafen, busy, disabled, serverMuted, devicesOpen, onMicrophone, onDeafen, onDevices, onLeave }) {
+export default function VoiceControlBar({ microphoneEnabled, deafen, busy, disabled, serverMuted, devicesOpen, musicOpen, onMicrophone, onDeafen, onDevices, onMusic, onLeave }) {
   return (
     <div className="voice-control-bar">
       <button type="button" className={!microphoneEnabled ? "active-off" : ""} onClick={onMicrophone} disabled={busy || disabled || deafen || serverMuted}>
@@ -11,6 +11,9 @@ export default function VoiceControlBar({ microphoneEnabled, deafen, busy, disab
       </button>
       <button type="button" className={devicesOpen ? "selected" : ""} onClick={onDevices} disabled={disabled}>
         <Settings2 /><span>音频设备</span>
+      </button>
+      <button type="button" className={musicOpen ? "selected" : ""} onClick={onMusic} disabled={disabled}>
+        <Music /><span>网易云音乐</span>
       </button>
       <button type="button" className="leave-voice" onClick={onLeave}><LogOut /><span>退出频道</span></button>
     </div>

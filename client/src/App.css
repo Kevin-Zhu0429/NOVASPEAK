@@ -2002,6 +2002,85 @@ input {
 .audio-device-panel .mic-constraints-title { color: #ccfbf1; font-size: 12px; }
 .audio-device-panel .mic-constraint-row { display: flex; flex-direction: row; align-items: center; gap: 8px; width: fit-content; }
 .audio-device-panel .mic-constraint-row input[type="checkbox"] { width: auto; }
+.music-panel { position: absolute; z-index: 6; right: 20px; bottom: 84px; width: min(480px, calc(100% - 40px)); max-height: min(560px, calc(100% - 104px)); overflow: hidden; padding: 16px; display: flex; flex-direction: column; box-sizing: border-box; gap: 13px; border: 1px solid rgba(94, 234, 212, .24); border-radius: 14px; background: #071923; box-shadow: 0 20px 55px rgba(0, 0, 0, .42); }
+.music-panel-body { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; display: grid; align-content: start; gap: 10px; padding-right: 8px; }
+.music-panel-empty { padding: 18px 0; color: #94a3b8; font-size: 13px; text-align: center; }
+.music-playlist-section, .music-tracks-section { display: grid; gap: 10px; min-width: 0; box-sizing: border-box; }
+.music-playlist-list, .music-track-list { min-width: 0; margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.music-playlist-item { width: 100%; box-sizing: border-box; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 11px; background: rgba(15, 23, 42, .55); color: inherit; text-align: left; }
+.music-playlist-item:hover { border-color: rgba(45, 212, 191, .5); background: #10312f; }
+.music-cover { width: 44px; height: 44px; border-radius: 9px; object-fit: cover; border: 1px solid rgba(94, 234, 212, .2); }
+.music-cover-fallback { display: flex; align-items: center; justify-content: center; color: #2dd4bf; background: #0f2e33; }
+.music-cover-fallback svg { width: 20px; }
+.music-cover-small { width: 34px; height: 34px; border-radius: 8px; }
+.music-playlist-info { display: grid; gap: 3px; min-width: 0; }
+.music-playlist-info strong { color: #e2f5f5; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-playlist-meta { display: inline-flex; align-items: center; gap: 7px; color: #94a3b8; font-size: 12px; }
+.music-tag { padding: 1px 7px; border: 1px solid rgba(148, 163, 184, .25); border-radius: 999px; color: #94a3b8; font-size: 11px; }
+.music-tag-subscribed { border-color: rgba(45, 212, 191, .4); color: #2dd4bf; }
+.music-tracks-header { display: flex; align-items: center; gap: 9px; min-width: 0; box-sizing: border-box; }
+.music-back-button { display: inline-flex; align-items: center; justify-content: center; padding: 6px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 9px; color: #94a3b8; background: transparent; flex-shrink: 0; }
+.music-back-button:hover { color: #e2f5f5; border-color: rgba(45, 212, 191, .5); }
+.music-back-button svg { width: 16px; }
+.music-tracks-title { color: #e2f5f5; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-track { min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid rgba(148, 163, 184, .1); border-radius: 10px; background: rgba(15, 23, 42, .45); }
+.music-track-unavailable { opacity: .55; }
+.music-track-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.music-track-name { color: #e2f5f5; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-track-meta { color: #94a3b8; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-track-reason { color: #fbbf24; font-size: 11px; }
+.music-track-duration { color: #94a3b8; font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.music-load-more { padding: 9px; border: 1px solid rgba(148, 163, 184, .18); border-radius: 10px; color: #ccfbf1; background: #12283a; font-size: 12px; }
+.music-load-more:hover:not(:disabled) { border-color: rgba(45, 212, 191, .5); }
+.music-session-expired { display: grid; gap: 12px; padding: 14px 0; justify-items: center; }
+.music-session-expired p { margin: 0; color: #fbbf24; font-size: 13px; }
+.music-panel-tabs { flex: 0 0 auto; display: flex; gap: 6px; }
+.music-tab { flex: 1; padding: 8px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 10px; color: #94a3b8; background: transparent; font-size: 12px; }
+.music-tab:hover { border-color: rgba(45, 212, 191, .4); color: #ccfbf1; }
+.music-tab-active { border-color: rgba(45, 212, 191, .5); color: #2dd4bf; background: rgba(19, 78, 74, .35); }
+.music-panel-feedback { padding: 8px 11px; border: 1px solid rgba(45, 212, 191, .3); border-radius: 10px; color: #99f6e4; background: rgba(19, 78, 74, .3); font-size: 12px; line-height: 1.6; }
+.music-enqueue-playlist-button { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 7px 10px; border: 1px solid rgba(45, 212, 191, .4); border-radius: 10px; color: #ccfbf1; background: #134e4a; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.music-enqueue-playlist-button svg { width: 15px; }
+.music-enqueue-playlist-button:hover:not(:disabled) { background: #0f766e; }
+.music-enqueue-button { display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; border: 1px solid rgba(45, 212, 191, .35); border-radius: 9px; color: #ccfbf1; background: #12352f; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.music-enqueue-button svg { width: 14px; }
+.music-enqueue-button:hover:not(:disabled) { background: #134e4a; }
+.music-track-cover-dim { opacity: .5; }
+.music-queue-section { display: grid; gap: 10px; min-width: 0; box-sizing: border-box; }
+.music-queue-list { min-width: 0; margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.music-queue-item { min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid rgba(148, 163, 184, .1); border-radius: 10px; background: rgba(15, 23, 42, .45); }
+.music-queue-item-mine { border-color: rgba(45, 212, 191, .35); }
+.music-queue-position { min-width: 22px; color: #2dd4bf; font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; flex-shrink: 0; }
+.music-queue-requester { color: #64748b; font-size: 11px; }
+.music-queue-cancel-button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 8px; color: #94a3b8; background: transparent; flex-shrink: 0; }
+.music-queue-cancel-button:hover:not(:disabled) { color: #fecaca; border-color: rgba(248, 113, 113, .5); }
+.music-queue-cancel-button svg { width: 14px; }
+.music-queue-now-playing { min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid rgba(45, 212, 191, .4); border-radius: 11px; background: rgba(19, 78, 74, .35); }
+.music-queue-now-label { color: #2dd4bf; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.music-panel-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.music-panel-title { display: inline-flex; align-items: center; gap: 8px; color: #ccfbf1; font-size: 14px; font-weight: 600; }
+.music-panel-title svg { width: 18px; color: #2dd4bf; }
+.music-panel-close { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 9px; color: #94a3b8; background: transparent; }
+.music-panel-close:hover { color: #e2f5f5; border-color: rgba(45, 212, 191, .5); }
+.music-panel-close svg { width: 16px; }
+.music-panel-loading { color: #94a3b8; font-size: 13px; }
+.music-login { display: grid; gap: 12px; }
+.music-login p { margin: 0; color: #94a3b8; font-size: 12px; line-height: 1.7; }
+.music-login-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border: 1px solid rgba(45, 212, 191, .4); border-radius: 11px; color: #dbeafe; background: #134e4a; font-size: 13px; }
+.music-login-button svg { width: 17px; }
+.music-login-button:hover:not(:disabled) { background: #0f766e; }
+.music-account { flex: 0 0 auto; min-height: 64px; box-sizing: border-box; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px 12px; align-items: center; padding: 9px 10px; border: 1px solid rgba(94, 234, 212, .18); border-radius: 12px; background: rgba(15, 23, 42, .48); }
+.music-account-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(94, 234, 212, .3); }
+.music-account-avatar-fallback { display: flex; align-items: center; justify-content: center; color: #2dd4bf; background: #0f2e33; }
+.music-account-avatar-fallback svg { width: 20px; }
+.music-account-info { display: grid; gap: 3px; min-width: 0; }
+.music-account-info strong { color: #e2f5f5; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-account-info span { color: #2dd4bf; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-logout-button { flex-shrink: 0; padding: 8px 11px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 11px; color: #fecaca; background: #4c1d2a; font-size: 12px; white-space: nowrap; }
+.music-logout-button:hover:not(:disabled) { background: #5f2333; }
+.music-panel-error { padding: 9px 11px; border: 1px solid rgba(248, 113, 113, .35); border-radius: 10px; color: #fecaca; background: rgba(76, 29, 42, .5); font-size: 12px; line-height: 1.6; }
+.music-panel button:disabled { opacity: .55; cursor: not-allowed; }
+.music-panel button:focus-visible { outline: 2px solid #2dd4bf; outline-offset: 2px; }
 .audio-device-panel .mic-constraints-hint { color: #94a3b8; font-size: 11px; line-height: 1.5; }
 .voice-remote-audio { display: none; }
 .network-stats { flex: 0 1 360px; min-width: min(360px, 100%); max-width: 100%; }
@@ -2040,6 +2119,13 @@ input {
   .voice-control-bar button span { display: none; }
 }
 @media (max-width: 520px) {
+  .music-panel { right: 10px; bottom: 74px; width: min(440px, calc(100% - 20px)); max-height: min(520px, calc(100% - 86px)); padding: 12px; gap: 10px; }
+  .music-panel-body { padding-right: 10px; }
+  .music-account { min-height: 60px; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
+  .music-account-avatar { width: 40px; height: 40px; }
+  .music-logout-button { padding: 7px 8px; }
+  .music-tracks-header { gap: 7px; }
+  .music-enqueue-playlist-button { padding: 7px 8px; }
   .sidebar { width: 132px; padding: 9px; }
   .brand h2 { font-size: 18px; }
   .brand span, .channel-name { font-size: 11px; }

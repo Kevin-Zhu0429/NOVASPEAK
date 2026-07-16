@@ -323,6 +323,41 @@ export function createPresenceService(options = {}) {
     return sendJson(match.connection, command);
   }
 
+  // 只读查询：频道内是否存在稳定听众（音乐机器人播放前提）。
+  // 只计算 state === "in_channel" 且频道完全一致的连接；
+  // lobby / reconnecting / 其他频道不算。不修改任何协议或状态。
+  function hasUsersInChannel(channelId) {
+    if (typeof channelId !== "string" || !channelId) return false;
+    for (const principal of principals.values()) {
+      for (const state of principal.connections.values()) {
+        if (state.state === "in_channel" && state.channelId === channelId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // 只读查询：指定用户当前是否位于指定频道（音乐队列等接口的频道校验）。
+  // 正式用户 id 映射为内部 user:<id>，guest:UUID 保持原值；
+  // 多标签页只要有一个连接命中即可；in_channel 允许，
+  // reconnecting 且频道一致时允许短暂访问；lobby / 其他频道 / 离线返回 false。
+  // 不修改任何 Presence 状态或协议。
+  function isUserInChannel(userId, channelId) {
+    if (typeof userId !== "string" || !userId) return false;
+    if (typeof channelId !== "string" || !channelId) return false;
+    const key = userId.startsWith("guest:") ? userId : `user:${userId}`;
+    const principal = principals.get(key);
+    if (!principal) return false;
+    for (const state of principal.connections.values()) {
+      if (state.channelId !== channelId) continue;
+      if (state.state === "in_channel" || state.state === "reconnecting") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // voice_control 控制消息只发给目标用户本人的 Presence 连接（LiveKit identity 自动
   // 归一化）。优先发给位于源频道的标签页；没有命中时发给该用户的全部标签页，
   // 由前端自行忽略不相关的控制消息。目标用户完全不在线时返回 false。
@@ -570,6 +605,8 @@ export function createPresenceService(options = {}) {
     runIdentityRevalidation,
     sendCommandToChannelConnection,
     sendVoiceControlToParticipant,
+    isUserInChannel,
+    hasUsersInChannel,
     setConnectionLocation,
     broadcastAnnouncement,
     beginParticipantMove,
