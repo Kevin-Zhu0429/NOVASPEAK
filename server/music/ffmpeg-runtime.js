@@ -1,10 +1,13 @@
 // FFmpeg 运行时定位与探测。
 //
-// 路径解析优先级：
-// 1. 环境变量 FFMPEG_PATH（必须是存在的非空绝对路径）；
-// 2. npm 包 ffmpeg-static 提供的二进制（npm install 自动按平台下载）；
-// 3. 都不可用 → 稳定错误 FFMPEG_NOT_AVAILABLE。
-// 绝不执行字符串 "ffmpeg"、绝不依赖系统 PATH。
+// 覆盖语义（权威规则，无静默回退）：
+// 1. FFMPEG_PATH 未定义或 trim 后为空 → 动态加载 ffmpeg-static，
+//    其返回路径必须是存在的绝对路径文件，否则 FFMPEG_NOT_AVAILABLE；
+// 2. FFMPEG_PATH 明确配置且非空 → 视为权威的管理员覆盖配置：
+//    必须是存在的绝对路径文件且 probe 成功；任何一步失败都返回
+//    FFMPEG_PATH_INVALID / 探测错误，绝不静默回退 ffmpeg-static。
+// 绝不执行字符串 "ffmpeg"、绝不依赖系统 PATH；
+// 错误信息与日志不包含完整本地路径。
 //
 // 探测（<ffmpegPath> -version）只在频道有待播放歌曲且有真实听众时才执行，
 // 普通 Express 启动不产生任何子进程。成功结果缓存。
@@ -15,6 +18,7 @@ import path from "node:path";
 
 export const FFMPEG_ERROR = Object.freeze({
   NOT_AVAILABLE: "FFMPEG_NOT_AVAILABLE",
+  PATH_INVALID: "FFMPEG_PATH_INVALID",
   PROBE_FAILED: "FFMPEG_PROBE_FAILED",
   PROBE_TIMEOUT: "FFMPEG_PROBE_TIMEOUT",
 });
@@ -56,11 +60,22 @@ async function defaultImportStatic() {
 /**
  * 创建 FFmpeg 运行时（依赖可注入，便于测试）。
  */
+// 默认文件检查：必须存在且是普通文件
+function defaultIsUsableFile(candidatePath) {
+  try {
+    return (
+      fs.statSync(candidatePath, { throwIfNoEntry: false })?.isFile() ?? false
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createFfmpegRuntime({
   env = process.env,
   importStatic = defaultImportStatic,
   spawnImpl = spawn,
-  existsImpl = fs.existsSync,
+  existsImpl = defaultIsUsableFile,
   probeTimeoutMs = 10_000,
 } = {}) {
   let cachedProbe = null;
@@ -68,16 +83,26 @@ export function createFfmpegRuntime({
   async function resolveFfmpegPath() {
     const override =
       typeof env.FFMPEG_PATH === "string" ? env.FFMPEG_PATH.trim() : "";
+
+    // FFMPEG_PATH 明确配置：权威覆盖，无效时绝不静默回退 ffmpeg-static。
+    // 错误信息不包含配置的完整本地路径。
     if (override) {
-      if (!path.isAbsolute(override) || !existsImpl(override)) {
+      if (!path.isAbsolute(override)) {
         throw new FfmpegRuntimeError(
-          FFMPEG_ERROR.NOT_AVAILABLE,
-          "FFMPEG_PATH 不是存在的绝对路径"
+          FFMPEG_ERROR.PATH_INVALID,
+          "FFMPEG_PATH 必须是绝对路径；留空可使用内置解码器"
+        );
+      }
+      if (!existsImpl(override)) {
+        throw new FfmpegRuntimeError(
+          FFMPEG_ERROR.PATH_INVALID,
+          "FFMPEG_PATH 指向的解码器文件不存在；留空可使用内置解码器"
         );
       }
       return override;
     }
 
+    // 未配置（或空）→ 内置 ffmpeg-static
     let staticPath;
     try {
       staticPath = await importStatic();
@@ -90,6 +115,7 @@ export function createFfmpegRuntime({
     if (
       typeof staticPath !== "string" ||
       !staticPath ||
+      !path.isAbsolute(staticPath) ||
       !existsImpl(staticPath)
     ) {
       throw new FfmpegRuntimeError(

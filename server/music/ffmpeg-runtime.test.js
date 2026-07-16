@@ -46,25 +46,76 @@ test("FFMPEG_PATH 为存在的绝对路径时优先使用", async () => {
   assert.equal(await runtime.resolveFfmpegPath(), "/custom/ffmpeg");
 });
 
-test("FFMPEG_PATH 非绝对路径或不存在时报 FFMPEG_NOT_AVAILABLE", async () => {
+test("FFMPEG_PATH 相对路径 / 不存在的绝对路径 → PATH_INVALID，且不回退 ffmpeg-static", async () => {
   for (const env of [
     { FFMPEG_PATH: "relative/ffmpeg" },
     { FFMPEG_PATH: "/missing/ffmpeg" },
   ]) {
+    let staticLoaded = false;
     const { runtime } = makeRuntime({
       env,
       existsImpl: () => false,
+      importStatic: async () => {
+        staticLoaded = true;
+        return "/static/path/ffmpeg";
+      },
     });
     await assert.rejects(
       () => runtime.resolveFfmpegPath(),
-      (error) => error.code === FFMPEG_ERROR.NOT_AVAILABLE
+      (error) =>
+        error.code === FFMPEG_ERROR.PATH_INVALID &&
+        // 错误信息不包含配置的完整本地路径
+        !error.message.includes(env.FFMPEG_PATH)
     );
+    assert.equal(staticLoaded, false, "配置无效时不得静默回退 ffmpeg-static");
   }
 });
 
 test("未配置 FFMPEG_PATH 时使用 ffmpeg-static", async () => {
   const { runtime } = makeRuntime({});
   assert.equal(await runtime.resolveFfmpegPath(), "/static/path/ffmpeg");
+});
+
+test("FFMPEG_PATH 为空字符串 / 纯空白时使用 ffmpeg-static", async () => {
+  for (const value of ["", "   ", "\t"]) {
+    const { runtime } = makeRuntime({ env: { FFMPEG_PATH: value } });
+    assert.equal(await runtime.resolveFfmpegPath(), "/static/path/ffmpeg");
+  }
+});
+
+test("配置的覆盖路径 probe 出现 ENOENT 时不回退 ffmpeg-static", async () => {
+  let staticLoaded = false;
+  const { runtime } = makeRuntime({
+    env: { FFMPEG_PATH: "/custom/ffmpeg" },
+    existsImpl: (p) => p === "/custom/ffmpeg",
+    importStatic: async () => {
+      staticLoaded = true;
+      return "/static/path/ffmpeg";
+    },
+    onSpawn: (child) => {
+      const error = new Error("spawn ENOENT");
+      error.code = "ENOENT";
+      child.emit("error", error);
+      child.emit("close", 1);
+    },
+  });
+  await assert.rejects(
+    () => runtime.probeFfmpeg(),
+    (error) =>
+      error.code === FFMPEG_ERROR.NOT_AVAILABLE &&
+      !error.message.includes("/custom/ffmpeg")
+  );
+  assert.equal(staticLoaded, false);
+});
+
+test("ffmpeg-static 返回相对路径时报 NOT_AVAILABLE", async () => {
+  const { runtime } = makeRuntime({
+    importStatic: async () => "relative/ffmpeg",
+  });
+  await assert.rejects(
+    () => runtime.resolveFfmpegPath(),
+    (error) => error.code === FFMPEG_ERROR.NOT_AVAILABLE
+  );
 });
 
 test("ffmpeg-static 返回空路径 / 文件缺失 / 加载失败 → NOT_AVAILABLE", async () => {

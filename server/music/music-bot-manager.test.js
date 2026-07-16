@@ -482,3 +482,48 @@ test("worker 顶层不产生 unhandledRejection", async () => {
     process.off("unhandledRejection", onUnhandled);
   }
 });
+
+test("FFMPEG_PATH_INVALID 归类为基础设施错误（requeue）", () => {
+  assert.equal(classifyPlaybackError({ code: "FFMPEG_PATH_INVALID" }), "requeue");
+});
+
+test("FFmpeg 配置错误：播放中歌曲恢复 pending、公平游标恢复、进入退避", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  enqueue(db, "user-b", 1);
+  const firstSong = "歌-user-a-" + (songSeq - 2);
+  let attempts = 0;
+  const { deps, logs } = makeDeps({
+    // 探测通过（缓存的旧结果），解码时二进制被移走 → 配置类错误
+    decodeToFrames: async () => {
+      attempts += 1;
+      const error = new Error("binary vanished");
+      error.code = attempts === 1 ? "FFMPEG_PATH_INVALID" : "FFMPEG_NOT_AVAILABLE";
+      throw error;
+    },
+  });
+  const manager = createMusicBotManager({ db, ...deps });
+  manager.kick("cs2");
+  // 第一次失败 requeue 后进入退避（10ms 起）；等待第二次尝试开始
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await manager.stop();
+
+  // 游标恢复：仍轮到 A（第二次尝试的也是 A1，而不是 B1）
+  const rows = db
+    .prepare("SELECT song_name, status FROM music_queue_items ORDER BY id")
+    .all();
+  // 两首都保持 pending（没有被吞、没有 failed）
+  assert.ok(rows.every((row) => row.status === "pending"), JSON.stringify(rows));
+  // 游标已恢复为 claim 之前的值 → 下一次 claim 仍是 A1
+  const { claimNextQueueItem } = await import("./music-queue.js");
+  const retry = claimNextQueueItem(db, { channelId: "cs2" });
+  assert.equal(retry.queueItem.song_name, firstSong);
+
+  // 至少经历一次失败与退避；日志只含稳定错误码，不含路径/Cookie
+  assert.ok(attempts >= 1);
+  const dump = logs.join("\n");
+  assert.ok(!dump.includes("/custom"));
+  assert.ok(!dump.includes("MUSIC_U"));
+  assert.ok(dump.includes("FFMPEG_PATH_INVALID") || dump.includes("FFMPEG_NOT_AVAILABLE"));
+  db.close();
+});

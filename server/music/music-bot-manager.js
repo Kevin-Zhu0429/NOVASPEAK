@@ -35,6 +35,7 @@ import {
 // 基础设施错误：requeue + 恢复游标 + 退避
 const INFRASTRUCTURE_CODES = new Set([
   "FFMPEG_NOT_AVAILABLE",
+  "FFMPEG_PATH_INVALID",
   "FFMPEG_PROBE_FAILED",
   "FFMPEG_PROBE_TIMEOUT",
   "FFMPEG_START_FAILED",
