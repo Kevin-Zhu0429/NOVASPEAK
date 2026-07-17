@@ -119,6 +119,9 @@ async function drain(manager, maxMs = 2000) {
 test("classifyPlaybackError：基础设施 / 跳过 / 失败", () => {
   assert.equal(classifyPlaybackError({ code: "FFMPEG_NOT_AVAILABLE" }), "requeue");
   assert.equal(classifyPlaybackError({ code: "MEDIA_STALL_TIMEOUT" }), "requeue");
+  assert.equal(classifyPlaybackError({ code: "MEDIA_STREAM_INTERRUPTED" }), "fail");
+  assert.equal(classifyPlaybackError({ code: "MEDIA_RANGE_UNSUPPORTED" }), "fail");
+  assert.equal(classifyPlaybackError({ code: "MEDIA_RANGE_MISMATCH" }), "fail");
   assert.equal(classifyPlaybackError({ code: "NETEASE_PLAYBACK_RATE_LIMITED" }), "requeue");
   assert.equal(classifyPlaybackError({ code: "MUSIC_BOT_CONNECT_FAILED" }), "requeue");
   assert.equal(classifyPlaybackError({ code: "NETEASE_PLAYBACK_TRIAL_ONLY" }), "skip");
@@ -357,6 +360,77 @@ test("CDN 超时 → requeue 且恢复公平游标（A1 仍是 A1）", async () 
   // A1 第一次失败被 requeue，重试时仍是 A1（不跳到 B1）
   assert.equal(order[0], firstSong);
   assert.equal(order[1], firstSong);
+  db.close();
+});
+
+test("分块重试耗尽后不从头重播，重建会话并继续 B1", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  enqueue(db, "user-b", 1);
+  const firstSong = "歌-user-a-" + (songSeq - 2);
+  const playbackOrder = [];
+  const closedSessions = [];
+  let sessionCount = 0;
+  let decodeCount = 0;
+  const { deps, logs } = makeDeps({
+    getSongPlaybackUrl: async ({ songId }) => {
+      const row = db
+        .prepare("SELECT song_name FROM music_queue_items WHERE song_id = ?")
+        .get(songId);
+      playbackOrder.push(row.song_name);
+      return { url: "https://m701.music.126.net/private.mp3?token=secret" };
+    },
+    createAudioSession: async () => {
+      sessionCount += 1;
+      const id = sessionCount;
+      return {
+        captureFrame: async () => {},
+        waitForPlayout: async () => {},
+        close: async () => closedSessions.push(id),
+      };
+    },
+    decodeToFrames: async ({ onFrame }) => {
+      decodeCount += 1;
+      if (decodeCount === 1) {
+        const error = new Error("must not be logged: token=secret");
+        error.code = "MEDIA_STREAM_INTERRUPTED";
+        error.diagnostics = {
+          hostname: "m701.music.126.net",
+          attemptCount: 3,
+          blockStart: 1048576,
+          bytesTransferred: 8192,
+          causeCodeChain: ["MEDIA_FETCH_FAILED", "UND_ERR_SOCKET"],
+        };
+        throw error;
+      }
+      await onFrame(new Int16Array(480));
+      return { framesDelivered: 1 };
+    },
+  });
+  const manager = createMusicBotManager({ db, ...deps });
+  manager.kick("cs2");
+  await drain(manager, 3000);
+
+  assert.equal(playbackOrder[0], firstSong);
+  assert.notEqual(playbackOrder[1], firstSong);
+  assert.equal(playbackOrder.length, 2);
+  assert.equal(sessionCount, 2);
+  assert.deepEqual(closedSessions, [1, 2]);
+  assert.deepEqual(
+    db
+      .prepare("SELECT status, failure_code FROM music_queue_items ORDER BY id")
+      .all(),
+    [
+      { status: "failed", failure_code: "MEDIA_STREAM_INTERRUPTED" },
+      { status: "finished", failure_code: null },
+    ]
+  );
+  const dump = logs.join("\n");
+  assert.match(dump, /MEDIA_STREAM_INTERRUPTED/);
+  assert.match(dump, /host=m701\.music\.126\.net/);
+  assert.equal(dump.includes("private.mp3"), false);
+  assert.equal(dump.includes("token=secret"), false);
+  assert.equal(dump.includes("MUSIC_U"), false);
   db.close();
 });
 

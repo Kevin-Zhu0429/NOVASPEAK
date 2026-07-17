@@ -66,8 +66,19 @@ const SKIP_CODES = new Set([
 const FAIL_CODES = new Set([
   "MEDIA_URL_REJECTED",
   "MEDIA_TOO_LARGE",
+  // Range 块内部已经做过有限重试；耗尽或服务器不支持安全分块时
+  // 结束当前歌曲，避免整首从头无限 requeue/replay。
+  "MEDIA_RANGE_UNSUPPORTED",
+  "MEDIA_RANGE_MISMATCH",
+  "MEDIA_STREAM_INTERRUPTED",
   "FFMPEG_DECODE_FAILED",
   "NETEASE_PLAYBACK_RESPONSE_INVALID",
+]);
+
+const SESSION_RESET_CODES = new Set([
+  "MEDIA_RANGE_UNSUPPORTED",
+  "MEDIA_RANGE_MISMATCH",
+  "MEDIA_STREAM_INTERRUPTED",
 ]);
 
 /**
@@ -109,10 +120,34 @@ export function createMusicBotManager({
   let stopped = false;
   let scanTimer = null;
 
-  function log(level, message, code) {
+  function log(level, message, errorOrCode) {
     try {
+      const code =
+        typeof errorOrCode === "string" ? errorOrCode : errorOrCode?.code;
+      const diagnostics = errorOrCode?.diagnostics;
+      const safeDetails = [];
+      if (
+        typeof diagnostics?.hostname === "string" &&
+        /^[a-z0-9.-]+$/i.test(diagnostics.hostname)
+      ) {
+        safeDetails.push(`host=${diagnostics.hostname}`);
+      }
+      for (const key of ["attemptCount", "blockStart", "bytesTransferred"]) {
+        if (Number.isSafeInteger(diagnostics?.[key]) && diagnostics[key] >= 0) {
+          safeDetails.push(`${key}=${diagnostics[key]}`);
+        }
+      }
+      if (Array.isArray(diagnostics?.causeCodeChain)) {
+        const codes = diagnostics.causeCodeChain.filter(
+          (item) => typeof item === "string" && /^[A-Z0-9_]+$/.test(item)
+        );
+        if (codes.length) safeDetails.push(`causes=${codes.slice(0, 5).join(",")}`);
+      }
+      const suffix = safeDetails.length ? ` [${safeDetails.join(" ")}]` : "";
       logger?.[level]?.(
-        code ? `[music-bot] ${message}（${code}）` : `[music-bot] ${message}`
+        code
+          ? `[music-bot] ${message}（${code}）${suffix}`
+          : `[music-bot] ${message}${suffix}`
       );
     } catch {
       // 日志失败绝不影响播放
@@ -163,6 +198,17 @@ export function createMusicBotManager({
       onFrame: (frame) => session.captureFrame(frame),
     });
     await session.waitForPlayout();
+  }
+
+  async function closeSession(sessionBox) {
+    const session = sessionBox.session;
+    sessionBox.session = null;
+    if (!session) return;
+    try {
+      await session.close();
+    } catch {
+      // close 是清理路径，失败不得影响 Express 或队列恢复
+    }
   }
 
   async function runWorker(channelId, abortController) {
@@ -217,12 +263,18 @@ export function createMusicBotManager({
               previousLastServedBucketOrder:
                 receipt.previousLastServedBucketOrder,
             });
-            log("error", "播放暂时失败，歌曲已放回队列", error?.code);
+            // 网络/FFmpeg/LiveKit 故障后不复用可能已经损坏的 AudioSource
+            // 或 Room；下一次重试必须建立全新的机器人音频会话。
+            await closeSession(sessionBox);
+            log("error", "播放暂时失败，歌曲已放回队列", error);
             backoffMs = backoffMs
               ? Math.min(backoffMs * 2, backoffMaxMs)
               : backoffInitialMs;
             if (!(await abortableDelay(backoffMs, signal))) break;
           } else {
+            if (SESSION_RESET_CODES.has(error?.code)) {
+              await closeSession(sessionBox);
+            }
             finishQueueItem(db, {
               queueItemId: receipt.queueItem.id,
               outcome: classification === "skip" ? "skipped" : "failed",
@@ -232,19 +284,13 @@ export function createMusicBotManager({
             log(
               "warn",
               classification === "skip" ? "歌曲已跳过" : "歌曲播放失败",
-              error?.code
+              error
             );
           }
         }
       }
     } finally {
-      if (sessionBox.session) {
-        try {
-          await sessionBox.session.close();
-        } catch {
-          // close 幂等且不抛出，双保险
-        }
-      }
+      await closeSession(sessionBox);
     }
   }
 

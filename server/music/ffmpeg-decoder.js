@@ -187,7 +187,18 @@ export async function decodeMediaToFrames({
   // 输入管道：媒体 → 字节上限 → stdin（错误捕获为值，不抛出）
   const inputPromise = pipeline(mediaStream, byteLimit, child.stdin).then(
     () => null,
-    (error) => error
+    (error) => {
+      // FFmpeg 自己正常/异常退出时 stdin 常见 EPIPE / premature close，
+      // 此时真正结果由 exit code 判断。除此之外说明上游媒体永久失败，
+      // 必须主动结束 FFmpeg，避免它继续等待 stdin 导致 worker 悬挂。
+      if (
+        error?.code !== "EPIPE" &&
+        error?.code !== "ERR_STREAM_PREMATURE_CLOSE"
+      ) {
+        terminate();
+      }
+      return error;
+    }
   );
 
   // 输出管道：stdout → 分帧 → 逐帧 await onFrame

@@ -246,6 +246,7 @@ test("媒体流中途错误 → MEDIA_PIPELINE_FAILED（保留 MediaSourceError 
       }),
     (error) => error.code === DECODER_ERROR.PIPELINE_FAILED
   );
+  assert.deepEqual(child.killSignals, ["SIGTERM"]);
 
   // byte-limit 超限：MediaSourceError 原样透出
   const child2 = makeFakeChild();
@@ -265,6 +266,7 @@ test("媒体流中途错误 → MEDIA_PIPELINE_FAILED（保留 MediaSourceError 
       }),
     (error) => error.code === MEDIA_ERROR.TOO_LARGE
   );
+  assert.deepEqual(child2.killSignals, ["SIGTERM"]);
 });
 
 test("Abort：SIGTERM 只发一次、kill timer 清理、报 FFMPEG_ABORTED", async () => {
