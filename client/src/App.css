@@ -163,6 +163,86 @@ input {
   color: white;
 }
 
+.channel-create-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(2, 6, 23, 0.76);
+}
+
+.channel-create-dialog {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 18px;
+  background: #07151c;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.channel-create-dialog h3 {
+  margin: 0 0 18px;
+}
+
+.channel-create-dialog label {
+  display: block;
+  margin-bottom: 8px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.channel-create-dialog input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  outline: none;
+  background: #0f172a;
+  color: white;
+  font: inherit;
+}
+
+.channel-create-dialog input:focus {
+  border-color: #2dd4bf;
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.12);
+}
+
+.channel-create-counter {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.channel-create-error {
+  margin-top: 10px;
+  color: #fca5a5;
+  font-size: 13px;
+}
+
+.channel-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.channel-create-actions button {
+  padding: 9px 13px;
+  border-radius: 9px;
+  background: #1f2937;
+  color: #cbd5e1;
+}
+
+.channel-create-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .channel-list {
   display: flex;
   flex-direction: column;

@@ -1,6 +1,6 @@
 {
   "name": "novaspeak-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "NovaSpeak Windows 桌面客户端",
   "author": "NovaSpeak",
@@ -9,7 +9,8 @@
     "dev": "electron .",
     "start": "electron .",
     "test": "node --test",
-    "dist:win": "electron-builder --win nsis portable --x64"
+    "dist:win": "electron-builder --win nsis portable --x64 --publish never",
+    "publish:update-local": "node scripts/publish-local-update.js"
   },
   "devDependencies": {
     "electron": "^43.1.0",
@@ -25,21 +26,32 @@
     },
     "files": [
       "main.js",
+      "auto-update.js",
       "main-window-policy.js",
       "preload.js",
       "netease-login.js",
       "netease-login-policy.js",
       "package.json"
     ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://app.novagaming.top/desktop-updates/"
+      }
+    ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -52,5 +64,8 @@
     "portable": {
       "artifactName": "NovaSpeak-${version}-${arch}-Portable.${ext}"
     }
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

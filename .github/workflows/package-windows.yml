@@ -46,6 +46,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NovaSpeak-Windows
-          path: desktop/dist/*.exe
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.yml
+            desktop/dist/*.blockmap
           if-no-files-found: error
           retention-days: 14

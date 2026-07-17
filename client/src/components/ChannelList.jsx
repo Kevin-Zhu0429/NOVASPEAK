@@ -1,3 +1,5 @@
+import { useState } from "react";
+import CreateChannelDialog from "./channels/CreateChannelDialog";
 import { sortChannels } from "../utils/channel-settings";
 export default function ChannelList({
   channels,
@@ -6,15 +8,7 @@ export default function ChannelList({
   onCreateChannel,
   onOpenChannelManagement,
 }) {
-  async function handleCreateChannel() {
-    const name = prompt("请输入新频道名称");
-
-    if (!name || !name.trim()) {
-      return;
-    }
-
-    await onCreateChannel(name.trim());
-  }
+  const [createOpen, setCreateOpen] = useState(false);
 
   return (
     <div className="channel-section">
@@ -29,7 +23,13 @@ export default function ChannelList({
           )}
 
           {typeof onCreateChannel === "function" && (
-            <button type="button" className="create-channel-btn" onClick={handleCreateChannel}>
+            <button
+              type="button"
+              className="create-channel-btn"
+              onClick={() => setCreateOpen(true)}
+              aria-label="创建语音频道"
+              title="创建语音频道"
+            >
               +
             </button>
           )}
@@ -59,6 +59,13 @@ export default function ChannelList({
           );
         })}
       </div>
+
+      {createOpen && (
+        <CreateChannelDialog
+          onCancel={() => setCreateOpen(false)}
+          onCreate={onCreateChannel}
+        />
+      )}
     </div>
   );
 }

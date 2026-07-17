@@ -12,7 +12,7 @@ import UserAvatar from "./components/common/UserAvatar";
 import usePresence from "./hooks/usePresence";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
-import { normalizeUserMessage, sortChannels } from "./utils/channel-settings";
+import { findSystemLobby, normalizeUserMessage, sortChannels } from "./utils/channel-settings";
 import { getForceMovePlan } from "./utils/voice-room-events";
 import "./App.css";
 
@@ -38,6 +38,7 @@ export default function App() {
   const [voiceNotice, setVoiceNotice] = useState("");
   const channelRequestIdRef = useRef(0);
   const lastChannelFetchErrorRef = useRef("");
+  const lobbyAutoJoinUserRef = useRef("");
 
   const [welcomeUser,setWelcomeUser,] = useState(null);
   const announcements = useVoiceAnnouncements(Boolean(currentUser));
@@ -154,31 +155,44 @@ export default function App() {
     return () => clearInterval(timer);
   }, [currentUser, fetchChannels]);
 
-  async function createChannel(name) {
-    try {
-      const response = await fetch( `${API_BASE}/api/channels`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({ name }),
+  // 登录后只自动加入一次真正的系统大厅。Presence 的 lobby 展示状态并不等于
+  // LiveKit 房间连接；选择 lobby 频道后复用现有 VoiceRoom 生命周期完成连接。
+  // 用户之后手动退出时不会被反复拉回大厅。
+  useEffect(() => {
+    const userId = typeof currentUser?.id === "string" ? currentUser.id : "";
+    if (!userId || currentChannel || lobbyAutoJoinUserRef.current === userId) return;
+    const lobby = findSystemLobby(channels);
+    if (!lobby) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setCurrentChannel((current) => {
+        if (current || lobbyAutoJoinUserRef.current === userId) return current;
+        lobbyAutoJoinUserRef.current = userId;
+        return lobby;
       });
+    });
+    return () => { cancelled = true; };
+  }, [channels, currentChannel, currentUser]);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "创建频道失败");
-      }
-
-      await fetchChannels();
-    } catch (error) {
-      console.error("创建频道失败：", error);
-      alert(`创建频道失败：${error.message}`);
-    }
+  async function createChannel(name) {
+    const response = await fetch(`${API_BASE}/api/channels`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({ name }),
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await response.json() : null;
+    if (!response.ok) throw new Error(data?.error || "创建频道失败");
+    await fetchChannels();
+    return data;
   }
 
   function handleLogin(user) {
+    lobbyAutoJoinUserRef.current = "";
     setCurrentUser(user);
     setWelcomeUser(user);
 
@@ -217,6 +231,10 @@ export default function App() {
 
   async function logout() {
   try {
+    // 退出请求完成前仍可能有一次 React render；保持本次登录周期的标记，
+    // 避免 currentChannel 清空后又短暂自动连回大厅。下次真正登录时
+    // handleLogin 会重置此标记。
+    lobbyAutoJoinUserRef.current = typeof currentUser?.id === "string" ? currentUser.id : "";
     setCurrentChannel(null);
 
     const response = await fetch(

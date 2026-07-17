@@ -10,6 +10,7 @@ import {
   canMoveChannelUp,
   canToggleGuests,
   extractApiError,
+  findSystemLobby,
   getAccessLevelLabel,
   getChannelFormInitialValues,
   parseMaxMembers,
@@ -110,6 +111,14 @@ test("sortChannels falls back by name and id for equal or missing sortOrder", ()
     { id: "b", name: "同名" },
     { id: "a", name: "Alpha" },
   ]).map((channel) => channel.id), ["a", "b", "c"]);
+});
+
+test("findSystemLobby only selects the protected lobby channel", () => {
+  const ordinaryLobby = { id: "lobby", name: "伪大厅", isSystem: false };
+  const systemLobby = { id: "lobby", name: "大厅", isSystem: true };
+  assert.equal(findSystemLobby([ordinaryLobby, systemLobby]), systemLobby);
+  assert.equal(findSystemLobby([{ id: "cs2", isSystem: true }]), null);
+  assert.equal(findSystemLobby(null), null);
 });
 
 test("stale channel GET results do not replace newer data", () => {

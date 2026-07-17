@@ -52,6 +52,12 @@ import {
   removeQueueDataForPrincipal,
 } from "./music/music-queue.js";
 import { createMusicBotManager } from "./music/music-bot-manager.js";
+import {
+  DESKTOP_UPDATE_PUBLIC_PATH,
+  isAllowedDesktopUpdateAsset,
+  resolveDesktopUpdateDirectory,
+  setDesktopUpdateResponseHeaders,
+} from "./desktop-updates.js";
 
 dotenv.config();
 
@@ -69,6 +75,10 @@ const uploadsDirectory = process.env.NOVASPEAK_UPLOADS_DIR
   : path.join(__dirname, "uploads");
 
 const avatarsDirectory = path.join(uploadsDirectory, "avatars");
+const desktopUpdateDirectory = resolveDesktopUpdateDirectory({
+  env: process.env,
+  serverDirectory: __dirname,
+});
 
 const app = express();
 
@@ -105,6 +115,29 @@ app.use("/uploads", (error, req, res, next) => {
       ? error.status
       : 404;
   res.status(status).json({ error: "头像文件不存在" });
+});
+
+// Electron 安装版 OTA 文件公开入口。只允许 electron-builder 生成的扁平
+// yml/exe/blockmap 资源，绝不暴露 server/data 中的数据库或其他运行时文件。
+app.use(DESKTOP_UPDATE_PUBLIC_PATH, (req, res, next) => {
+  if ((req.method !== "GET" && req.method !== "HEAD") || !isAllowedDesktopUpdateAsset(req.path)) {
+    return res.status(404).type("text/plain").send("Update file not found");
+  }
+  next();
+});
+
+app.use(
+  DESKTOP_UPDATE_PUBLIC_PATH,
+  express.static(desktopUpdateDirectory, {
+    fallthrough: false,
+    index: false,
+    dotfiles: "deny",
+    setHeaders: setDesktopUpdateResponseHeaders,
+  }),
+);
+
+app.use(DESKTOP_UPDATE_PUBLIC_PATH, (error, req, res, next) => {
+  res.status(404).type("text/plain").send("Update file not found");
 });
 
 function getLiveKitAdminUrl() {

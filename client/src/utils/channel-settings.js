@@ -74,6 +74,11 @@ export function sortChannels(channels) {
   ));
 }
 
+export function findSystemLobby(channels) {
+  if (!Array.isArray(channels)) return null;
+  return channels.find((channel) => channel?.id === "lobby" && channel?.isSystem === true) || null;
+}
+
 export function applyChannelFetchResult(state, result) {
   if (!result?.ok || !Array.isArray(result.channels)) return state;
   if (Number.isInteger(result.requestId) && result.requestId !== state.latestRequestId) return state;

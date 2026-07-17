@@ -1,10 +1,11 @@
 const path = require("node:path");
-const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
 const {
   PROD_APP_URL,
   classifyMainWindowNavigation,
 } = require("./main-window-policy");
 const { startNeteaseLogin } = require("./netease-login");
+const { startAutoUpdates } = require("./auto-update");
 
 const DEV_SERVER_URL = "http://localhost:5173";
 
@@ -40,6 +41,7 @@ function buildDevServerErrorPage() {
 
 // NovaSpeak 主窗口引用：IPC 调用来源校验与登录窗口父窗口都依赖它
 let mainWindow = null;
+let autoUpdateController = null;
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -117,6 +119,11 @@ app.whenReady().then(() => {
   });
 
   createMainWindow();
+  autoUpdateController = startAutoUpdates({
+    app,
+    dialog,
+    getMainWindow: () => mainWindow,
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -129,4 +136,9 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  autoUpdateController?.stop();
+  autoUpdateController = null;
 });

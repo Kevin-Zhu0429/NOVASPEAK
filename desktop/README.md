@@ -65,8 +65,41 @@ npm run dist:win
 
 - `NovaSpeak-<版本>-x64-Setup.exe`：NSIS 安装包。
 - `NovaSpeak-<版本>-x64-Portable.exe`：免安装便携版。
+- `latest.yml` 与 `*.blockmap`：安装版自动更新所需的元数据。
 
 推送到 `main` 时，GitHub Actions 也会在 Windows runner 上执行相同打包，并上传 `NovaSpeak-Windows` artifact。
+
+## 安装版自动更新
+
+自动更新只支持 NSIS 安装版；`Portable.exe` 仍需手动替换。客户端启动约 15 秒后检查一次，此后每 4 小时检查一次。发现新版本时会先询问是否下载，下载完成后可以立即重启更新，也可以等退出应用时安装。
+
+更新文件通过以下公开地址提供：
+
+```text
+https://app.novagaming.top/desktop-updates/
+```
+
+第一次启用自动更新时，现有用户必须手动安装一次 `0.2.0` 安装版；从这个版本开始才具备 OTA 能力。
+
+以后发布更新：
+
+1. 将 `desktop/package.json` 的 `version` 提升，例如从 `0.2.0` 改为 `0.2.1`。
+2. 在 Windows 构建并发布到当前服务器：
+
+```powershell
+cd C:\Users\zkcsk\Desktop\NovaSpeak\desktop
+npm ci
+npm test
+npm run dist:win
+npm run publish:update-local
+```
+
+`publish:update-local` 默认把 `latest.yml`、安装版 EXE 和 blockmap 复制到 `server/data/desktop-updates/`。如果更新目录在其他位置，可在 `server/.env` 与运行发布命令的 PowerShell 中设置同一个绝对 `DESKTOP_UPDATE_DIR`。
+
+3. 重启或保持 server 运行均可，静态更新文件无需重启即可生效。
+4. 先检查 `https://app.novagaming.top/desktop-updates/latest.yml` 可以访问，再通知用户重启 NovaSpeak 检查更新。
+
+必须先完整复制安装包和 blockmap，最后再覆盖 `latest.yml`，避免客户端在文件尚未就绪时读到新版本清单。当前脚本在本机复制速度很快；如果以后改成远程上传，应在部署流程中明确保持这一顺序。
 
 ## 安全配置
 
@@ -80,12 +113,11 @@ npm run dist:win
 本阶段刻意不包含以下能力(后续阶段再做):
 
 - 系统托盘、后台常驻、开机启动
-- 自动更新
 - 按键说话(Push-to-Talk)
 - Windows 代码签名
 
 ## 后续阶段计划
 
-1. 桌面体验：托盘、窗口状态记忆、自动更新。
+1. 桌面体验：托盘、窗口状态记忆、更新下载进度 UI。
 2. 正式发布前配置 Windows 代码签名，消除 SmartScreen 的“未知发布者”提示。
 3. 按键说话与全局快捷键（不改 VoiceRoom 生命周期，通过 preload 暴露受控 API）。
