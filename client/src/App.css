@@ -1951,6 +1951,30 @@ input {
 .connection-recovery-actions .danger { background: #be123c; }
 .voice-room-content { flex: 1; min-height: 0; display: flex; }
 .voice-chat-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid rgba(94, 234, 212, .1); }
+.channel-music-stage { flex: 0 0 auto; min-width: 0; display: grid; gap: 10px; padding: 16px 18px 13px; border-bottom: 1px solid rgba(94, 234, 212, .16); background: linear-gradient(135deg, rgba(13, 57, 63, .82), rgba(8, 30, 43, .92)); }
+.channel-music-stage-main { min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 13px; }
+.channel-music-stage-copy { min-width: 0; display: grid; gap: 2px; }
+.channel-music-stage-copy strong { overflow: hidden; color: #f0fdfa; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-music-stage-copy > span:not(.channel-music-stage-eyebrow) { overflow: hidden; color: #b6d7da; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-music-stage-copy small { overflow: hidden; color: #7dd3c7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-music-stage-eyebrow { color: #2dd4bf; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.channel-music-cover { width: 72px; height: 72px; display: block; object-fit: cover; border: 1px solid rgba(94, 234, 212, .3); border-radius: 12px; box-shadow: 0 10px 24px rgba(0, 0, 0, .24); }
+.channel-music-cover-fallback { display: grid; place-items: center; color: #2dd4bf; background: #0f2e33; }
+.channel-music-cover-fallback svg { width: 27px; }
+.channel-music-official-link { align-self: start; display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid rgba(45, 212, 191, .3); border-radius: 9px; color: #99f6e4; background: rgba(15, 118, 110, .18); font-size: 11px; text-decoration: none; white-space: nowrap; }
+.channel-music-official-link:hover { border-color: rgba(45, 212, 191, .65); background: rgba(15, 118, 110, .34); }
+.channel-music-official-link svg { width: 13px; }
+.channel-music-progress-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.channel-music-progress { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, .18); }
+.channel-music-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #14b8a6, #67e8f9); transition: width .45s linear; }
+.channel-music-time { color: #a7c7cc; font-size: 11px; font-variant-numeric: tabular-nums; }
+.channel-music-copyright-note { margin: -3px 0 0 85px; color: #5f7f87; font-size: 10px; }
+.channel-music-stage-idle { min-height: 58px; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; padding-top: 10px; padding-bottom: 10px; }
+.channel-music-stage-idle > span:last-child { min-width: 0; display: grid; gap: 2px; }
+.channel-music-stage-idle strong { color: #c7e8e7; font-size: 12px; }
+.channel-music-stage-idle small { overflow: hidden; color: #66858b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-music-stage-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; color: #2dd4bf; background: rgba(15, 118, 110, .2); }
+.channel-music-stage-icon svg { width: 17px; }
 .voice-participants-panel { width: 310px; flex: 0 0 310px; min-height: 0; padding: 18px; overflow-y: auto; background: rgba(5, 20, 27, .62); }
 .voice-panel-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
 .voice-panel-title h3 { margin: 0; font-size: 15px; }
@@ -2109,6 +2133,12 @@ input {
   .voice-room-header { min-height: 90px; padding: 13px 14px; }
   .voice-room-content { flex-direction: column-reverse; overflow-y: auto; }
   .voice-chat-panel { min-height: 300px; }
+  .channel-music-stage { padding: 11px 12px 9px; }
+  .channel-music-stage-main { grid-template-columns: 52px minmax(0, 1fr) auto; gap: 9px; }
+  .channel-music-cover { width: 52px; height: 52px; border-radius: 10px; }
+  .channel-music-stage-copy strong { font-size: 14px; }
+  .channel-music-official-link span { display: none; }
+  .channel-music-copyright-note { margin-left: 61px; }
   .voice-participants-panel { width: 100%; flex: none; max-height: 43%; padding: 12px; border-bottom: 1px solid rgba(94, 234, 212, .1); }
   .lobby-content { flex-direction: column; }
   .lobby-content .empty-state { display: none; }

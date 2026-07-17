@@ -276,10 +276,29 @@ function toPublicQueueItem(row, viewer, projectedPosition) {
   };
 }
 
+function toPublicNowPlaying(row, viewer, now) {
+  const durationMs = Math.max(0, Number(row.duration_ms) || 0);
+  const startedAt = Number.isSafeInteger(row.started_at)
+    ? row.started_at
+    : null;
+  const elapsedMs = startedAt === null
+    ? 0
+    : Math.min(durationMs, Math.max(0, now - startedAt));
+
+  return {
+    ...toPublicQueueItem(row, viewer, 0),
+    playback: {
+      startedAt,
+      elapsedMs,
+      durationMs,
+    },
+  };
+}
+
 /**
  * 当前频道共享队列快照，items 按预计公平播放顺序返回。
  */
-export function getQueueSnapshot(db, { channelId, viewer }) {
+export function getQueueSnapshot(db, { channelId, viewer, now = Date.now() }) {
   const channel = ensureChannel(db, channelId);
   const state = getQueueState(db, channelId);
   const pendingRows = listPendingRows(db, channelId);
@@ -304,7 +323,7 @@ export function getQueueSnapshot(db, { channelId, viewer }) {
   return {
     channelId: channel.id,
     nowPlaying: playingRow
-      ? toPublicQueueItem(playingRow, viewer, 0)
+      ? toPublicNowPlaying(playingRow, viewer, now)
       : null,
     items: ordered.map((entry, index) =>
       toPublicQueueItem(entry.row, viewer, index + 1)
@@ -312,6 +331,33 @@ export function getQueueSnapshot(db, { channelId, viewer }) {
     totalPending: pendingRows.length,
     revision: state.revision,
   };
+}
+
+/**
+ * 第一帧真正进入 LiveKit 时校准播放开始时间。claim 的 started_at 只代表
+ * worker 领取时间，可能包含取 URL、连接 CDN 和启动 FFmpeg 的等待时间。
+ */
+export function markQueueItemPlaybackStarted(
+  db,
+  { queueItemId, now = Date.now() }
+) {
+  return db.transaction(() => {
+    const row = db
+      .prepare(
+        "SELECT id, channel_id FROM music_queue_items WHERE id = ? AND status = 'playing'"
+      )
+      .get(queueItemId);
+    if (!row) return null;
+
+    db.prepare(
+      "UPDATE music_queue_items SET started_at = ? WHERE id = ? AND status = 'playing'"
+    ).run(now, queueItemId);
+
+    return {
+      startedAt: now,
+      revision: bumpRevision(db, row.channel_id, now),
+    };
+  })();
 }
 
 /**

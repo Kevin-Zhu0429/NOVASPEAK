@@ -29,6 +29,7 @@ import {
   finishQueueItem,
   hasPendingItems,
   listChannelsWithPending,
+  markQueueItemPlaybackStarted,
   requeueClaimedItem,
 } from "./music-queue.js";
 
@@ -189,13 +190,20 @@ export function createMusicBotManager({
 
     const mediaStream = await openMediaStream(url, { signal });
     const byteLimit = createByteLimit();
+    let playbackStarted = false;
     await decodeToFrames({
       ffmpegPath,
       mediaStream,
       byteLimit,
       signal,
       env,
-      onFrame: (frame) => session.captureFrame(frame),
+      onFrame: async (frame) => {
+        if (!playbackStarted) {
+          playbackStarted = true;
+          markQueueItemPlaybackStarted(db, { queueItemId: item.id });
+        }
+        await session.captureFrame(frame);
+      },
     });
     await session.waitForPlayout();
   }

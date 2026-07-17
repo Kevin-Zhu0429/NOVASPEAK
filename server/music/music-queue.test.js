@@ -18,6 +18,7 @@ import {
   getRemainingQueueCapacity,
   hasPendingItems,
   listChannelsWithPending,
+  markQueueItemPlaybackStarted,
   recoverInterruptedQueueItems,
   removeQueueDataForPrincipal,
   requeueClaimedItem,
@@ -159,6 +160,51 @@ test("每频道最多一个 playing；claim 原子性", () => {
   finishQueueItem(db, { queueItemId: first.id, outcome: "finished" });
   const second = claimItem(db, { channelId: "cs2" });
   assert.equal(second.song_name, "A2");
+  db.close();
+});
+
+test("第一帧校准 started_at，快照返回安全且有界的播放进度", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["A1"]);
+  const receipt = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+
+  const calibrated = markQueueItemPlaybackStarted(db, {
+    queueItemId: receipt.queueItem.id,
+    now: 5_000,
+  });
+  assert.equal(calibrated.startedAt, 5_000);
+
+  const snapshot = getQueueSnapshot(db, {
+    channelId: "cs2",
+    viewer: { principalKey: "user-a", isAdmin: false },
+    now: 6_250,
+  });
+  assert.deepEqual(snapshot.nowPlaying.playback, {
+    startedAt: 5_000,
+    elapsedMs: 1_250,
+    durationMs: 240_000,
+  });
+  assert.equal(snapshot.nowPlaying.requester.isCurrentUser, true);
+  assert.ok(!JSON.stringify(snapshot).includes("principal_key"));
+
+  const completed = getQueueSnapshot(db, {
+    channelId: "cs2",
+    viewer: { principalKey: "viewer", isAdmin: false },
+    now: 999_999,
+  });
+  assert.equal(completed.nowPlaying.playback.elapsedMs, 240_000);
+
+  finishQueueItem(db, {
+    queueItemId: receipt.queueItem.id,
+    outcome: "finished",
+  });
+  assert.equal(
+    markQueueItemPlaybackStarted(db, {
+      queueItemId: receipt.queueItem.id,
+      now: 10_000,
+    }),
+    null
+  );
   db.close();
 });
 

@@ -51,3 +51,37 @@ export function formatTrackCount(trackCount) {
     ? `${Math.trunc(trackCount)} 首`
     : "";
 }
+
+/**
+ * 根据服务端快照和本地接收时间平滑推进播放进度。
+ * 不依赖客户端与服务端时钟相同，只累计收到快照后的本地时间差。
+ */
+export function getPlaybackProgress(
+  playback,
+  receivedAt,
+  now = Date.now()
+) {
+  const durationMs = Number.isFinite(playback?.durationMs)
+    ? Math.max(0, playback.durationMs)
+    : 0;
+  const snapshotElapsedMs = Number.isFinite(playback?.elapsedMs)
+    ? Math.max(0, playback.elapsedMs)
+    : 0;
+  const localDelta = Number.isFinite(receivedAt) && Number.isFinite(now)
+    ? Math.max(0, now - receivedAt)
+    : 0;
+  const elapsedMs = Math.min(durationMs, snapshotElapsedMs + localDelta);
+
+  return {
+    durationMs,
+    elapsedMs,
+    percent: durationMs > 0 ? (elapsedMs / durationMs) * 100 : 0,
+  };
+}
+
+export function buildNeteaseSongUrl(songId) {
+  const normalized = String(songId ?? "").trim();
+  return /^\d{1,20}$/.test(normalized)
+    ? `https://music.163.com/#/song?id=${normalized}`
+    : null;
+}

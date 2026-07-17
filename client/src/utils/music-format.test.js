@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildNeteaseSongUrl,
   formatArtists,
   formatTrackCount,
   formatTrackDuration,
+  getPlaybackProgress,
 } from "./music-format.js";
 
 test("时长格式化：0 毫秒", () => {
@@ -47,5 +49,42 @@ test("歌曲数量文案", () => {
   assert.equal(formatTrackCount(0), "0 首");
   for (const bad of [-1, NaN, null, undefined, "3"]) {
     assert.equal(formatTrackCount(bad), "", String(bad));
+  }
+});
+
+test("播放进度：按快照后的本地时间推进并限制在歌曲时长内", () => {
+  const progressing = getPlaybackProgress(
+    { elapsedMs: 30_000, durationMs: 180_000 },
+    1_000,
+    3_500
+  );
+  assert.equal(progressing.elapsedMs, 32_500);
+  assert.equal(progressing.durationMs, 180_000);
+  assert.ok(Math.abs(progressing.percent - (32_500 / 180_000) * 100) < 1e-9);
+  assert.deepEqual(
+    getPlaybackProgress(
+      { elapsedMs: 179_000, durationMs: 180_000 },
+      1_000,
+      5_000
+    ),
+    { elapsedMs: 180_000, durationMs: 180_000, percent: 100 }
+  );
+});
+
+test("播放进度：无效数据安全归零", () => {
+  assert.deepEqual(getPlaybackProgress(null, NaN, NaN), {
+    elapsedMs: 0,
+    durationMs: 0,
+    percent: 0,
+  });
+});
+
+test("网易云歌曲链接只接受十进制歌曲 ID", () => {
+  assert.equal(
+    buildNeteaseSongUrl("123456"),
+    "https://music.163.com/#/song?id=123456"
+  );
+  for (const invalid of ["", "abc", "1&x=2", "1/2", "1".repeat(21)]) {
+    assert.equal(buildNeteaseSongUrl(invalid), null);
   }
 });
