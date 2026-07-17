@@ -46,6 +46,8 @@ function createMockRtc({
             event: "publish",
             trackName: track.name,
             source: options.source,
+            dtx: options.dtx,
+            maxBitrate: options.audioEncoding?.maxBitrate,
           });
           if (failPublish) throw new Error("mock: publish refused");
           return { sid: "MOCK_PUBLICATION_SID" };
@@ -390,18 +392,22 @@ test("音乐会话：连接、发布、captureFrame/waitForPlayout、幂等 clos
   });
   assert.equal(session.identity, "music-bot:music-ch");
 
-  const samples = new Int16Array(480).fill(3);
+  const samples = new Int16Array(960).fill(3);
   await session.captureFrame(samples);
   await session.captureFrame(samples);
   await session.waitForPlayout();
 
-  // AudioSource 48k/mono；AudioFrame 480 采样
+  // AudioSource 48k/stereo；AudioFrame 每声道 480 采样
   const sourceEvent = log.find((entry) => entry.event === "source-created");
   assert.equal(sourceEvent.sampleRate, 48000);
-  assert.equal(sourceEvent.numChannels, 1);
+  assert.equal(sourceEvent.numChannels, 2);
   assert.equal(captured.frames.length, 2);
   assert.equal(captured.frames[0].samplesPerChannel, 480);
   assert.equal(captured.frames[0].sampleRate, 48000);
+  assert.equal(captured.frames[0].channels, 2);
+  const publishEvent = log.find((entry) => entry.event === "publish");
+  assert.equal(publishEvent.dtx, false);
+  assert.equal(publishEvent.maxBitrate, 192000n);
 
   // close 两次：清理只执行一次
   await session.close();
@@ -468,7 +474,7 @@ test("音乐会话：captureFrame 错误映射稳定 MusicBotError；error 与 c
   });
 
   await assert.rejects(
-    () => session.captureFrame(new Int16Array(480)),
+    () => session.captureFrame(new Int16Array(960)),
     (error) =>
       error.code === MUSIC_BOT_ERROR.PUBLISH_FAILED &&
       !String(error.message).includes("native")

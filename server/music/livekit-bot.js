@@ -26,6 +26,8 @@ export class MusicBotError extends Error {
 }
 
 export const MUSIC_BOT_NAME = "音乐机器人";
+export const MUSIC_BOT_AUDIO_BITRATE = 192_000;
+export const MUSIC_BOT_AUDIO_CHANNELS = 2;
 
 // 同一频道固定 identity，避免重复机器人长期残留
 export function getMusicBotIdentity(channelId) {
@@ -234,7 +236,7 @@ export async function createMusicBotAudioSession({
   loadRtc = defaultLoadRtc,
   token = null,
   sampleRate = 48000,
-  channels = 1,
+  channels = MUSIC_BOT_AUDIO_CHANNELS,
   queueSizeMs = 200,
 } = {}) {
   if (typeof channelId !== "string" || !channelId.trim()) {
@@ -312,6 +314,9 @@ export async function createMusicBotAudioSession({
       );
       const publishOptions = new rtc.TrackPublishOptions({
         source: rtc.TrackSource.SOURCE_MICROPHONE,
+        // 连续音乐不使用语音活动检测；192 kbps Opus 足以承载高质量立体声。
+        dtx: false,
+        audioEncoding: { maxBitrate: BigInt(MUSIC_BOT_AUDIO_BITRATE) },
       });
       publication = await room.localParticipant.publishTrack(
         track,
@@ -337,7 +342,8 @@ export async function createMusicBotAudioSession({
     },
 
     /**
-     * 推送一帧 PCM（Int16Array，480 采样）。失败转换为稳定 MusicBotError。
+     * 推送一帧 PCM（Int16Array；默认双声道共 960 个采样值）。
+     * 失败转换为稳定 MusicBotError。
      */
     async captureFrame(samples) {
       if (closed || !source) {

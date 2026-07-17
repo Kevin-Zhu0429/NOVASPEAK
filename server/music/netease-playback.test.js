@@ -15,14 +15,14 @@ function goodEntry(overrides = {}) {
   return {
     id: 9000,
     url: "https://m701.music.126.net/fake/audio.mp3",
-    br: 128000,
+    br: 320000,
     code: 200,
     freeTrialInfo: null,
     ...overrides,
   };
 }
 
-test("song_url_v1 standard：正常返回完整 URL", async () => {
+test("song_url_v1 exhigh：请求账号权限内的极高音质并返回完整 URL", async () => {
   const calls = [];
   const client = createNeteaseClient({
     api: {
@@ -43,12 +43,12 @@ test("song_url_v1 standard：正常返回完整 URL", async () => {
   assert.equal(result.url, "https://m701.music.126.net/fake/audio.mp3");
   assert.deepEqual(calls[0], {
     id: "9000",
-    level: "standard",
+    level: "exhigh",
     cookie: "MUSIC_U=fake-a",
   });
 });
 
-test("v1 方法不存在时降级 song_url br=128000", async () => {
+test("v1 方法不存在时降级 song_url br=320000", async () => {
   const calls = [];
   const client = createNeteaseClient({
     api: {
@@ -63,7 +63,7 @@ test("v1 方法不存在时降级 song_url br=128000", async () => {
     cookie: "MUSIC_U=fake",
   });
   assert.ok(result.url);
-  assert.deepEqual(calls[0], { id: "9000", br: 128000, cookie: "MUSIC_U=fake" });
+  assert.deepEqual(calls[0], { id: "9000", br: 320000, cookie: "MUSIC_U=fake" });
 });
 
 test("v1 兼容性异常（库内部错误）后降级 song_url", async () => {

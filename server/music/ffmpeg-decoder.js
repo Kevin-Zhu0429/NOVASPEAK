@@ -1,9 +1,10 @@
 // FFmpeg 流式解码（Stage 5B v2 全新实现）。
 //
 // 数据流：媒体 Readable → byte-limit Transform → FFmpeg stdin；
-// FFmpeg stdout（s16le PCM）→ 960 字节分帧 → await onFrame(帧)。
+// FFmpeg stdout（s16le PCM）→ 1920 字节分帧 → await onFrame(帧)。
 //
-// 输出固定：48000Hz / 单声道 / signed 16-bit LE / 10ms 帧（480 采样 = 960 字节）。
+// 输出固定：48000Hz / 双声道 / signed 16-bit LE / 10ms 帧
+// （每声道 480 采样，共 960 个 Int16 = 1920 字节）。
 //
 // 安全：shell:false；URL 绝不进入 argv（媒体从 stdin 流入）；
 // Cookie 绝不进入 argv/env（子进程环境走白名单）；
@@ -36,9 +37,11 @@ export class DecoderError extends Error {
 }
 
 export const PCM_SAMPLE_RATE = 48000;
-export const PCM_CHANNELS = 1;
+export const PCM_CHANNELS = 2;
+// 每声道每帧采样数；LiveKit AudioFrame 的 samplesPerChannel 使用此值。
 export const PCM_FRAME_SAMPLES = 480;
-export const PCM_FRAME_BYTES = PCM_FRAME_SAMPLES * 2; // 960
+export const PCM_FRAME_VALUES = PCM_FRAME_SAMPLES * PCM_CHANNELS;
+export const PCM_FRAME_BYTES = PCM_FRAME_VALUES * 2; // 1920
 
 export const FFMPEG_DECODE_ARGS = Object.freeze([
   "-nostdin",
@@ -66,7 +69,7 @@ const DEFAULT_KILL_TIMEOUT_MS = 5_000;
 
 /**
  * PCM 分帧 Transform：stdout 的 chunk 边界与帧边界无关，
- * remainder 跨 chunk 保存；结尾不足 960 字节时补零成完整一帧
+ * remainder 跨 chunk 保存；结尾不足 1920 字节时补零成完整一帧
  * （行为固定，有测试锁定）。
  */
 export function createFrameChunker() {
@@ -95,7 +98,7 @@ export function createFrameChunker() {
       if (remainder.length > 0) {
         const padded = Buffer.alloc(PCM_FRAME_BYTES);
         remainder.copy(padded);
-        this.push(new Int16Array(padded.buffer, padded.byteOffset, PCM_FRAME_SAMPLES));
+        this.push(new Int16Array(padded.buffer, padded.byteOffset, PCM_FRAME_VALUES));
         remainder = Buffer.alloc(0);
       }
       callback();

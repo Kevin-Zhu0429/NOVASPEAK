@@ -5,8 +5,10 @@ import { PassThrough, Readable } from "node:stream";
 import {
   DECODER_ERROR,
   FFMPEG_DECODE_ARGS,
+  PCM_CHANNELS,
   PCM_FRAME_BYTES,
   PCM_FRAME_SAMPLES,
+  PCM_FRAME_VALUES,
   createFrameChunker,
   decodeMediaToFrames,
 } from "./ffmpeg-decoder.js";
@@ -57,37 +59,37 @@ function pcmOf(totalBytes, fill = 1) {
 
 // ---------- 分帧器 ----------
 
-test("frame chunker：任意 chunk 切分得到正确 960 字节帧 + remainder 跨 chunk", async () => {
+test("frame chunker：任意 chunk 切分得到正确双声道 1920 字节帧 + remainder", async () => {
   const chunker = createFrameChunker();
   const frames = [];
   const done = (async () => {
     for await (const frame of chunker) frames.push(frame);
   })();
 
-  // 总计 2500 字节，按奇怪的边界切分：960*2=1920 整帧 + 580 remainder
-  const full = Buffer.alloc(2500);
+  // 总计 4420 字节，按奇怪边界切分：1920*2=3840 整帧 + 580 remainder
+  const full = Buffer.alloc(4420);
   for (let i = 0; i < full.length; i += 1) full[i] = i % 251;
   chunker.write(full.subarray(0, 7));
   chunker.write(full.subarray(7, 1000));
   chunker.write(full.subarray(1000, 1001));
-  chunker.write(full.subarray(1001, 2500));
+  chunker.write(full.subarray(1001, 4420));
   chunker.end();
   await done;
 
   assert.equal(frames.length, 3);
   for (const frame of frames) {
     assert.ok(frame instanceof Int16Array);
-    assert.equal(frame.length, PCM_FRAME_SAMPLES);
+    assert.equal(frame.length, PCM_FRAME_VALUES);
   }
   // 前两帧与源字节一致
   const joined = Buffer.concat(
     frames.map((frame) => Buffer.from(frame.buffer, frame.byteOffset, PCM_FRAME_BYTES))
   );
-  assert.ok(joined.subarray(0, 1920).equals(full.subarray(0, 1920)));
+  assert.ok(joined.subarray(0, 3840).equals(full.subarray(0, 3840)));
   // 末尾 580 字节补零成完整一帧（固定行为）
-  assert.ok(joined.subarray(1920, 1920 + 580).equals(full.subarray(1920)));
+  assert.ok(joined.subarray(3840, 3840 + 580).equals(full.subarray(3840)));
   assert.ok(
-    joined.subarray(1920 + 580).equals(Buffer.alloc(PCM_FRAME_BYTES - 580))
+    joined.subarray(3840 + 580).equals(Buffer.alloc(PCM_FRAME_BYTES - 580))
   );
 });
 
@@ -96,7 +98,7 @@ test("frame chunker：任意 chunk 切分得到正确 960 字节帧 + remainder 
 test("成功解码：参数安全 + 帧数正确", async () => {
   const child = makeFakeChild();
   const spawnCalls = [];
-  scriptEcho(child, { pcm: pcmOf(960 * 5) });
+  scriptEcho(child, { pcm: pcmOf(PCM_FRAME_BYTES * 5) });
 
   const frames = [];
   const result = await decodeMediaToFrames({
@@ -114,9 +116,11 @@ test("成功解码：参数安全 + 帧数正确", async () => {
   const call = spawnCalls[0];
   assert.equal(call.command, "/fake/ffmpeg");
   assert.deepEqual(call.args, [...FFMPEG_DECODE_ARGS]);
-  // 48k / 单声道 / s16le / stdin 输入
+  // 48k / 双声道 / s16le / stdin 输入
   assert.ok(call.args.includes("-ar") && call.args.includes("48000"));
-  assert.ok(call.args.includes("-ac") && call.args.includes("1"));
+  assert.ok(call.args.includes("-ac") && call.args.includes(String(PCM_CHANNELS)));
+  assert.equal(PCM_FRAME_SAMPLES, 480);
+  assert.equal(PCM_FRAME_VALUES, 960);
   assert.ok(call.args.includes("s16le"));
   assert.ok(call.args.includes("pipe:0"));
   // shell:false + 环境白名单（无密钥），URL/Cookie 不在 argv

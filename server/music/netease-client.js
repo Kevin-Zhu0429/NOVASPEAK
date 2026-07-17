@@ -266,8 +266,9 @@ export function createNeteaseClient({
     /**
      * 获取单曲完整播放地址（点歌者自己的 Cookie）。
      *
-     * 优先 song_url_v1(level: standard)；只有在 v1 方法不存在、
-     * 发生库兼容性异常或响应结构明显无效时才降级 song_url(br: 128000)。
+     * 优先 song_url_v1(level: exhigh)，请求当前账号权限内的极高音质；
+     * 只有在 v1 方法不存在、发生库兼容性异常或响应结构明显无效时
+     * 才降级 song_url(br: 320000)。网易云仍会按账号权限决定实际可用音质。
      * 明确的无版权 / 无权限 / 试听限制 / 登录失效 / 限流一律直接抛出，
      * 绝不用旧接口绕过。
      *
@@ -290,7 +291,7 @@ export function createNeteaseClient({
       if (!shouldFallback) {
         try {
           const response = await withTimeout(
-            api.song_url_v1({ id: songId, level: "standard", cookie }),
+            api.song_url_v1({ id: songId, level: "exhigh", cookie }),
             timeoutMs
           );
           entry = extractPlaybackEntry(response, songId);
@@ -313,7 +314,7 @@ export function createNeteaseClient({
       if (shouldFallback) {
         try {
           const response = await withTimeout(
-            api.song_url({ id: songId, br: 128000, cookie }),
+            api.song_url({ id: songId, br: 320000, cookie }),
             timeoutMs
           );
           entry = extractPlaybackEntry(response, songId);

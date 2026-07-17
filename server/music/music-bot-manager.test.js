@@ -84,7 +84,7 @@ function makeDeps(overrides = {}) {
     decodeToFrames:
       overrides.decodeToFrames ??
       (async ({ onFrame }) => {
-        await onFrame(new Int16Array(480));
+        await onFrame(new Int16Array(960));
         return { framesDelivered: 1 };
       }),
     logger: {
@@ -101,7 +101,7 @@ function makeDeps(overrides = {}) {
 // 追踪播放顺序的成功解码器
 function trackingDecoder(played) {
   return async ({ onFrame }) => {
-    await onFrame(new Int16Array(480));
+    await onFrame(new Int16Array(960));
     return { framesDelivered: 1 };
   };
 }
@@ -154,7 +154,7 @@ test("同频道只有一个 worker", async () => {
       concurrent += 1;
       maxConcurrent = Math.max(maxConcurrent, concurrent);
       await new Promise((resolve) => setTimeout(resolve, 15));
-      await onFrame(new Int16Array(480));
+      await onFrame(new Int16Array(960));
       concurrent -= 1;
       return { framesDelivered: 1 };
     },
@@ -403,7 +403,7 @@ test("分块重试耗尽后不从头重播，重建会话并继续 B1", async ()
         };
         throw error;
       }
-      await onFrame(new Int16Array(480));
+      await onFrame(new Int16Array(960));
       return { framesDelivered: 1 };
     },
   });
@@ -489,7 +489,7 @@ test("成功一首后清除退避（连续两首快速播放）", async () => {
   const { deps } = makeDeps({
     decodeToFrames: async ({ onFrame }) => {
       timestamps.push(Date.now());
-      await onFrame(new Int16Array(480));
+      await onFrame(new Int16Array(960));
       return { framesDelivered: 1 };
     },
   });
