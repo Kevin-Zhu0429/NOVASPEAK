@@ -1,11 +1,14 @@
 const path = require("node:path");
 const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
+const {
+  PROD_APP_URL,
+  classifyMainWindowNavigation,
+} = require("./main-window-policy");
 const { startNeteaseLogin } = require("./netease-login");
 
 const DEV_SERVER_URL = "http://localhost:5173";
-const PROD_INDEX_PATH = path.join(__dirname, "..", "client", "dist", "index.html");
 
-// NOVASPEAK_DESKTOP_DEV=true 强制开发模式;=false 强制加载 client/dist;
+// NOVASPEAK_DESKTOP_DEV=true 强制开发模式;=false 强制加载线上生产应用;
 // 未设置时,未打包运行(electron .)默认视为开发模式。
 const desktopDevFlag = process.env.NOVASPEAK_DESKTOP_DEV;
 const isDev =
@@ -67,6 +70,14 @@ function createMainWindow() {
     return { action: "deny" };
   });
 
+  const mainPageUrl = isDev ? DEV_SERVER_URL : PROD_APP_URL;
+  win.webContents.on("will-navigate", (event, url) => {
+    const action = classifyMainWindowNavigation(url, mainPageUrl);
+    if (action === "allow") return;
+    event.preventDefault();
+    if (action === "external") shell.openExternal(url);
+  });
+
   if (isDev) {
     win.webContents.on("did-fail-load", (event, errorCode, errorDescription, validatedURL) => {
       if (validatedURL && validatedURL.startsWith(DEV_SERVER_URL)) {
@@ -76,8 +87,9 @@ function createMainWindow() {
     });
     win.loadURL(DEV_SERVER_URL);
   } else {
-    // 5A 阶段生产模式仅作结构预留:file:// 下 /api、/ws、/uploads 尚未打通,详见 desktop/README.md。
-    win.loadFile(PROD_INDEX_PATH);
+    // 打包版直接加载同源线上应用，/api、/ws、/uploads 与 Session Cookie
+    // 全部继续由 app.novagaming.top 提供；桌面包中不保存任何后端密钥。
+    win.loadURL(PROD_APP_URL);
   }
 
   win.on("closed", () => {

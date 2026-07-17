@@ -1,0 +1,51 @@
+name: Package NovaSpeak for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - ".github/workflows/package-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: npm test
+
+      - name: Build Windows installer and portable app
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist:win
+
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaSpeak-Windows
+          path: desktop/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
