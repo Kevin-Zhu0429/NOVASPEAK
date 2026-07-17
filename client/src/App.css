@@ -2012,7 +2012,7 @@ input {
 .voice-control-bar button.leave-voice { color: white; background: #9f1239; }
 .voice-control-bar button:disabled { opacity: .48; cursor: not-allowed; }
 .voice-control-bar svg { width: 19px; }
-.audio-device-panel { position: absolute; z-index: 6; right: 20px; bottom: 84px; width: min(360px, calc(100% - 40px)); padding: 16px; display: grid; gap: 13px; border: 1px solid rgba(94, 234, 212, .24); border-radius: 14px; background: #071923; box-shadow: 0 20px 55px rgba(0, 0, 0, .42); }
+.audio-device-panel { position: absolute; z-index: 6; right: 20px; bottom: 84px; width: min(360px, calc(100% - 40px)); max-height: min(620px, calc(100% - 104px)); overflow-y: auto; overscroll-behavior: contain; padding: 16px; display: grid; gap: 13px; border: 1px solid rgba(94, 234, 212, .24); border-radius: 14px; background: #071923; box-shadow: 0 20px 55px rgba(0, 0, 0, .42); }
 .audio-device-panel label { display: grid; gap: 7px; color: #ccfbf1; font-size: 12px; }
 .audio-device-panel select { width: 100%; padding: 10px; border: 1px solid #334155; border-radius: 9px; color: white; background: #0f172a; }
 .device-unsupported, .device-error { color: #fbbf24; font-size: 12px; }
@@ -2020,6 +2020,14 @@ input {
 .audio-device-panel .mic-constraints-title { color: #ccfbf1; font-size: 12px; }
 .audio-device-panel .mic-constraint-row { display: flex; flex-direction: row; align-items: center; gap: 8px; width: fit-content; }
 .audio-device-panel .mic-constraint-row input[type="checkbox"] { width: auto; }
+.audio-device-panel .voice-gate-settings { display: grid; gap: 9px; padding-top: 12px; border-top: 1px solid rgba(94, 234, 212, .16); }
+.audio-device-panel .voice-gate-settings .mic-constraint-row { width: 100%; }
+.audio-device-panel .voice-gate-settings .mic-constraint-row strong { margin-left: auto; padding: 2px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.audio-device-panel .voice-gate-open { color: #99f6e4; background: rgba(13, 148, 136, .24); }
+.audio-device-panel .voice-gate-closed { color: #cbd5e1; background: rgba(71, 85, 105, .32); }
+.audio-device-panel .voice-gate-threshold { display: grid; gap: 6px; }
+.audio-device-panel .voice-gate-threshold input[type="range"] { width: 100%; accent-color: #2dd4bf; }
+.audio-device-panel .voice-gate-threshold input[type="range"]:disabled { opacity: .45; }
 .music-panel { position: absolute; z-index: 6; right: 20px; bottom: 84px; width: min(480px, calc(100% - 40px)); max-height: min(560px, calc(100% - 104px)); overflow: hidden; padding: 16px; display: flex; flex-direction: column; box-sizing: border-box; gap: 13px; border: 1px solid rgba(94, 234, 212, .24); border-radius: 14px; background: #071923; box-shadow: 0 20px 55px rgba(0, 0, 0, .42); }
 .music-panel-body { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; display: grid; align-content: start; gap: 10px; padding-right: 8px; }
 .music-panel-empty { padding: 18px 0; color: #94a3b8; font-size: 13px; text-align: center; }

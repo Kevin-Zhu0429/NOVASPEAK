@@ -90,3 +90,28 @@ export function getAudioElementPatch({ deafened = false, localMuted = false, vol
     volume: Math.min(1, localMuted === true ? 0 : clampMemberVolume(volume) / 100),
   };
 }
+
+// LiveKit webAudioMix 会把远端音轨接入 Web Audio GainNode，允许真实超过
+// HTMLMediaElement 100% 上限。Web Audio 模式下原始 <audio> 必须保持 muted，
+// 实际听音音量全部交给 track.setVolume（0 ～ 2）。不支持 Web Audio 时安全降级。
+export function getRemoteAudioPlaybackPlan({
+  deafened = false,
+  localMuted = false,
+  volume = DEFAULT_MEMBER_VOLUME,
+  webAudioEnabled = false,
+} = {}) {
+  const effectiveVolume = getEffectiveVolume({ deafened, localMuted, volume });
+  if (webAudioEnabled) {
+    return {
+      elementMuted: true,
+      elementVolume: 1,
+      trackVolume: effectiveVolume,
+    };
+  }
+  const fallback = getAudioElementPatch({ deafened, localMuted, volume });
+  return {
+    elementMuted: fallback.muted,
+    elementVolume: fallback.volume,
+    trackVolume: null,
+  };
+}

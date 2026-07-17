@@ -9,8 +9,9 @@ import MusicPanel from "../music/MusicPanel";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
+import useVoiceGate from "../../hooks/useVoiceGate";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
-import { getAudioElementPatch, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
+import { getMemberAudioKey, getMemberAudioPref, getRemoteAudioPlaybackPlan } from "../../utils/local-audio-preferences";
 import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
@@ -149,16 +150,35 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
   const { prefs: localAudioPrefs, setMemberVolume, setMemberLocalMuted } = useLocalAudioPreferences();
   const { constraints: micConstraints, toggleConstraint: toggleMicConstraint, applyError: micConstraintError } = useMicrophoneConstraints(room);
+  const voiceGate = useVoiceGate(room, microphoneEnabled);
   const localAudioPrefsRef = useRef(localAudioPrefs);
 
   // 将 Deafen + 本地偏好应用到所有已存在的远端音频元素：
-  // muted 只由 Deafen 控制，本地静音/单成员音量映射到 element.volume（clamp 到 1）。
+  // Web Audio 模式用 RemoteAudioTrack GainNode 实现真实 0～200% 增益；
+  // 不支持 Web Audio 时才安全降级到 element.volume（clamp 到 1）。
   const applyLocalAudioPrefs = useCallback(() => {
     for (const entry of audioElements.current.values()) {
       const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(entry.participantIdentity));
-      const patch = getAudioElementPatch({ deafened: deafenRef.current, localMuted: pref.muted, volume: pref.volume });
-      entry.element.muted = patch.muted;
-      entry.element.volume = patch.volume;
+      let plan = getRemoteAudioPlaybackPlan({
+        deafened: deafenRef.current,
+        localMuted: pref.muted,
+        volume: pref.volume,
+        webAudioEnabled: entry.webAudioEnabled,
+      });
+      try {
+        if (plan.trackVolume !== null) entry.track.setVolume(plan.trackVolume);
+      } catch {
+        // 极少数浏览器创建 AudioContext 失败时退回原生 audio 音量。
+        entry.webAudioEnabled = false;
+        plan = getRemoteAudioPlaybackPlan({
+          deafened: deafenRef.current,
+          localMuted: pref.muted,
+          volume: pref.volume,
+          webAudioEnabled: false,
+        });
+      }
+      entry.element.muted = plan.elementMuted;
+      entry.element.volume = plan.elementVolume;
     }
   }, []);
 
@@ -173,7 +193,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     let disposed = false;
     movedRef.current = false;
     disconnectReasonRef.current = "connect-attempt-created";
-    const activeRoom = new Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: getAudioCaptureDefaults(loadMicConstraints()) });
+    const activeRoom = new Room({ adaptiveStream: true, dynacast: true, webAudioMix: true, audioCaptureDefaults: getAudioCaptureDefaults(loadMicConstraints()) });
     roomRef.current = activeRoom;
     voiceLifecycleDebug("connect-attempt-created", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom });
     queueMicrotask(() => {
@@ -195,11 +215,28 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       element.className = "voice-remote-audio";
       const participantIdentity = participant?.identity || "";
       const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(participantIdentity));
-      const patch = getAudioElementPatch({ deafened: deafenRef.current, localMuted: pref.muted, volume: pref.volume });
-      element.muted = patch.muted;
-      element.volume = patch.volume;
+      let webAudioEnabled = Boolean(activeRoom.audioContext && typeof track.setVolume === "function");
+      let plan = getRemoteAudioPlaybackPlan({
+        deafened: deafenRef.current,
+        localMuted: pref.muted,
+        volume: pref.volume,
+        webAudioEnabled,
+      });
+      try {
+        if (plan.trackVolume !== null) track.setVolume(plan.trackVolume);
+      } catch {
+        webAudioEnabled = false;
+        plan = getRemoteAudioPlaybackPlan({
+          deafened: deafenRef.current,
+          localMuted: pref.muted,
+          volume: pref.volume,
+          webAudioEnabled: false,
+        });
+      }
+      element.muted = plan.elementMuted;
+      element.volume = plan.elementVolume;
       document.body.appendChild(element);
-      audioElements.current.set(publication.trackSid, { track, element, participantIdentity });
+      audioElements.current.set(publication.trackSid, { track, element, participantIdentity, webAudioEnabled });
       element.play().catch(() => valid() && setAudioBlocked(true));
     };
     const detachAudio = (track, publication) => {
@@ -461,7 +498,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         </section>
         <VoiceParticipantList apiBase={apiBase} participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
-      {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} micConstraints={micConstraints} onToggleMicConstraint={toggleMicConstraint} micConstraintError={micConstraintError} />}
+      {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} micConstraints={micConstraints} onToggleMicConstraint={toggleMicConstraint} micConstraintError={micConstraintError} voiceGate={voiceGate} />}
       {musicOpen && <MusicPanel apiBase={apiBase} channelId={channel.id} onClose={() => setMusicOpen(false)} />}
       <VoiceControlBar microphoneEnabled={microphoneEnabled} deafen={deafen} busy={busy} disabled={controlsDisabled} serverMuted={isParticipantServerMuted(room?.localParticipant)} devicesOpen={devicesOpen} musicOpen={musicOpen} onMicrophone={toggleMicrophone} onDeafen={toggleDeafen} onDevices={() => { setDevicesOpen((value) => { const next = !value; if (next) setMusicOpen(false); return next; }); }} onMusic={() => { setMusicOpen((value) => { const next = !value; if (next) setDevicesOpen(false); return next; }); }} onLeave={() => onLeave?.()} />
     </div>

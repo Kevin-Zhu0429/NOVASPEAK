@@ -7,6 +7,7 @@ import {
   getEffectiveVolume,
   getMemberAudioKey,
   getMemberAudioPref,
+  getRemoteAudioPlaybackPlan,
   loadLocalAudioPrefs,
   normalizeMemberAudioPref,
   saveLocalAudioPrefs,
@@ -123,4 +124,29 @@ test("设置变化后生成正确 audio patch", () => {
   assert.deepEqual(getAudioElementPatch({ deafened: false, localMuted: true, volume: 60 }), { muted: false, volume: 0 });
   assert.deepEqual(getAudioElementPatch({ deafened: true, localMuted: false, volume: 60 }), { muted: true, volume: 0.6 });
   assert.deepEqual(getAudioElementPatch({ deafened: true, localMuted: true, volume: 60 }), { muted: true, volume: 0 });
+});
+
+test("Web Audio 模式下 200% 音量由 GainNode 真实放大两倍", () => {
+  assert.deepEqual(
+    getRemoteAudioPlaybackPlan({ volume: 200, webAudioEnabled: true }),
+    { elementMuted: true, elementVolume: 1, trackVolume: 2 }
+  );
+});
+
+test("Web Audio 模式下本地静音与 Deafen 都把轨道增益设为 0", () => {
+  assert.equal(
+    getRemoteAudioPlaybackPlan({ volume: 180, localMuted: true, webAudioEnabled: true }).trackVolume,
+    0
+  );
+  assert.equal(
+    getRemoteAudioPlaybackPlan({ volume: 180, deafened: true, webAudioEnabled: true }).trackVolume,
+    0
+  );
+});
+
+test("不支持 Web Audio 时仍安全降级到 audio 元素 100% 上限", () => {
+  assert.deepEqual(
+    getRemoteAudioPlaybackPlan({ volume: 200, webAudioEnabled: false }),
+    { elementMuted: false, elementVolume: 1, trackVolume: null }
+  );
 });

@@ -91,7 +91,7 @@ export default function VoiceMemberContextMenu({ position, item, currentUser, cu
             aria-label="成员本地音量"
           />
           {(localPref?.volume ?? 100) > 100 && (
-            <small>浏览器原生音量最高为 100%，更高增益后续再支持</small>
+            <small>已启用本地音量增强；过高可能导致声音失真</small>
           )}
         </div>
       )}
