@@ -294,15 +294,16 @@ export function createNeteaseMusicRouter({
       );
     }
     snapshot.controls = {
-      canControlPlayback: req.authUser.role === "admin",
+      canControlPlayback:
+        req.authUser.role === "admin" || req.authUser.role === "member",
     };
     return snapshot;
   }
 
-  function requirePlaybackAdmin(req, res, next) {
-    if (req.authUser.role !== "admin") {
+  function requirePlaybackMember(req, res, next) {
+    if (req.authUser.role !== "admin" && req.authUser.role !== "member") {
       return res.status(403).json({
-        error: "只有管理员可以控制频道音乐播放",
+        error: "只有正式战队成员可以控制频道音乐播放",
         code: "MUSIC_PLAYBACK_FORBIDDEN",
       });
     }
@@ -469,7 +470,7 @@ export function createNeteaseMusicRouter({
   router.post(
     "/channels/:channelId/playback/pause",
     requireInChannel,
-    requirePlaybackAdmin,
+    requirePlaybackMember,
     (req, res) => {
       if (typeof req.body?.paused !== "boolean") {
         return res.status(400).json({
@@ -500,7 +501,7 @@ export function createNeteaseMusicRouter({
   router.post(
     "/channels/:channelId/playback/skip",
     requireInChannel,
-    requirePlaybackAdmin,
+    requirePlaybackMember,
     async (req, res) => {
       const result = await playbackController?.skip?.(req.params.channelId);
       if (!result?.changed) {

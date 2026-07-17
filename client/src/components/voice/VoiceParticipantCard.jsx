@@ -84,11 +84,11 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
             <span>{formatTrackDuration(musicStatus.progress?.elapsedMs || 0)} / {formatTrackDuration(musicStatus.progress?.durationMs || 0)}</span>
           </div>
           <div className="music-bot-card-controls">
-            <button type="button" onClick={musicStatus.togglePaused} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? (musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放") : "仅管理员可控制"} aria-label={musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放"}>
+            <button type="button" onClick={musicStatus.togglePaused} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? (musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放") : "访客不可控制"} aria-label={musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放"}>
               {musicNowPlaying.playback?.paused ? <Play size={14} /> : <Pause size={14} />}
               <span>{musicNowPlaying.playback?.paused ? "继续" : "暂停"}</span>
             </button>
-            <button type="button" onClick={musicStatus.skip} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? "下一首" : "仅管理员可控制"} aria-label="下一首">
+            <button type="button" onClick={musicStatus.skip} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? "下一首" : "访客不可控制"} aria-label="下一首">
               <SkipForward size={14} /><span>下一首</span>
             </button>
             {musicStatus.error && <em title={musicStatus.error}>控制状态异常</em>}

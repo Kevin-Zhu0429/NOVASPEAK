@@ -295,24 +295,53 @@ test("队列快照：公平顺序、canCancel、不暴露 principal/guest UUID",
       (item) => item.requester.isCurrentUser === true && item.canCancel === true
     )
   );
-  assert.equal(view.json.controls.canControlPlayback, false);
+  assert.equal(view.json.controls.canControlPlayback, true);
 });
 
-test("播放控制：仅当前频道管理员可暂停/继续和下一首", async () => {
+test("播放控制：当前频道 Admin/Member 可用，Guest 被拒绝", async () => {
   membership.set("user-a", "cs2");
   setUser("user-a", { role: "member", displayName: "普通成员" });
-  const forbiddenPause = await api(
+  const memberPause = await api(
     "POST",
     "/api/music/netease/channels/cs2/playback/pause",
     { paused: true }
   );
-  assert.equal(forbiddenPause.status, 403);
-  assert.equal(forbiddenPause.json.code, "MUSIC_PLAYBACK_FORBIDDEN");
-  const forbiddenSkip = await api(
+  assert.equal(memberPause.status, 200);
+  assert.equal(memberPause.json.playback.paused, true);
+  const memberSkip = await api(
     "POST",
     "/api/music/netease/channels/cs2/playback/skip"
   );
-  assert.equal(forbiddenSkip.status, 403);
+  assert.equal(memberSkip.status, 200);
+  const memberView = await api(
+    "GET",
+    "/api/music/netease/channels/cs2/queue"
+  );
+  assert.equal(memberView.json.controls.canControlPlayback, true);
+
+  setUser("guest:control-uuid", {
+    role: "guest",
+    displayName: "访客",
+    isGuest: true,
+  });
+  membership.set("guest:control-uuid", "cs2");
+  const guestPause = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/pause",
+    { paused: false }
+  );
+  assert.equal(guestPause.status, 403);
+  assert.equal(guestPause.json.code, "MUSIC_PLAYBACK_FORBIDDEN");
+  const guestSkip = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/skip"
+  );
+  assert.equal(guestSkip.status, 403);
+  const guestView = await api(
+    "GET",
+    "/api/music/netease/channels/cs2/queue"
+  );
+  assert.equal(guestView.json.controls.canControlPlayback, false);
 
   setUser("admin-control", { role: "admin", displayName: "管理员" });
   membership.set("admin-control", "cs2");
@@ -324,23 +353,17 @@ test("播放控制：仅当前频道管理员可暂停/继续和下一首", asyn
   assert.equal(invalid.status, 400);
   assert.equal(invalid.json.code, "MUSIC_PLAYBACK_INVALID_STATE");
 
-  const paused = await api(
+  const resumed = await api(
     "POST",
     "/api/music/netease/channels/cs2/playback/pause",
-    { paused: true }
+    { paused: false }
   );
-  assert.equal(paused.status, 200);
-  assert.equal(paused.json.playback.paused, true);
+  assert.equal(resumed.status, 200);
+  assert.equal(resumed.json.playback.paused, false);
   assert.deepEqual(playbackCalls.pause.at(-1), {
     channelId: "cs2",
-    paused: true,
+    paused: false,
   });
-
-  const skipped = await api(
-    "POST",
-    "/api/music/netease/channels/cs2/playback/skip"
-  );
-  assert.equal(skipped.status, 200);
   assert.equal(playbackCalls.skip.at(-1), "cs2");
 
   const adminView = await api(
