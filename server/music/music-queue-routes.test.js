@@ -90,6 +90,21 @@ const mockPresence = {
   },
 };
 
+const playbackCalls = { pause: [], skip: [] };
+const mockPlaybackController = {
+  getPlaybackState() {
+    return { active: true, queueItemId: "1", paused: false, elapsedMs: 1500 };
+  },
+  setPaused(channelId, paused) {
+    playbackCalls.pause.push({ channelId, paused });
+    return { active: true, queueItemId: "1", paused, elapsedMs: 1500, changed: true };
+  },
+  async skip(channelId) {
+    playbackCalls.skip.push(channelId);
+    return { active: true, queueItemId: "1", paused: false, elapsedMs: 1500, changed: true };
+  },
+};
+
 const authState = { user: { id: "user-a", isGuest: false, role: "member", displayName: "甲" } };
 
 const app = express();
@@ -100,6 +115,7 @@ app.use(
     db,
     neteaseClient: mockClient,
     presenceService: mockPresence,
+    playbackController: mockPlaybackController,
     requireAuthenticated: (req, res, next) => {
       req.authUser = authState.user;
       next();
@@ -137,6 +153,8 @@ test("不在频道的用户被拒绝（403 MUSIC_NOT_IN_CHANNEL）", async () =>
     ["GET", "/api/music/netease/channels/cs2/queue"],
     ["POST", "/api/music/netease/channels/cs2/queue/tracks", { playlistId: "500", songId: "9000", trackIndex: 0 }],
     ["POST", "/api/music/netease/channels/cs2/queue/playlists", { playlistId: "500" }],
+    ["POST", "/api/music/netease/channels/cs2/playback/pause", { paused: true }],
+    ["POST", "/api/music/netease/channels/cs2/playback/skip"],
     ["DELETE", "/api/music/netease/channels/cs2/queue/1"],
   ]) {
     const result = await api(method, path, body);
@@ -277,6 +295,60 @@ test("队列快照：公平顺序、canCancel、不暴露 principal/guest UUID",
       (item) => item.requester.isCurrentUser === true && item.canCancel === true
     )
   );
+  assert.equal(view.json.controls.canControlPlayback, false);
+});
+
+test("播放控制：仅当前频道管理员可暂停/继续和下一首", async () => {
+  membership.set("user-a", "cs2");
+  setUser("user-a", { role: "member", displayName: "普通成员" });
+  const forbiddenPause = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/pause",
+    { paused: true }
+  );
+  assert.equal(forbiddenPause.status, 403);
+  assert.equal(forbiddenPause.json.code, "MUSIC_PLAYBACK_FORBIDDEN");
+  const forbiddenSkip = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/skip"
+  );
+  assert.equal(forbiddenSkip.status, 403);
+
+  setUser("admin-control", { role: "admin", displayName: "管理员" });
+  membership.set("admin-control", "cs2");
+  const invalid = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/pause",
+    { paused: "yes" }
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.json.code, "MUSIC_PLAYBACK_INVALID_STATE");
+
+  const paused = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/pause",
+    { paused: true }
+  );
+  assert.equal(paused.status, 200);
+  assert.equal(paused.json.playback.paused, true);
+  assert.deepEqual(playbackCalls.pause.at(-1), {
+    channelId: "cs2",
+    paused: true,
+  });
+
+  const skipped = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/skip"
+  );
+  assert.equal(skipped.status, 200);
+  assert.equal(playbackCalls.skip.at(-1), "cs2");
+
+  const adminView = await api(
+    "GET",
+    "/api/music/netease/channels/cs2/queue"
+  );
+  assert.equal(adminView.status, 200);
+  assert.equal(adminView.json.controls.canControlPlayback, true);
 });
 
 test("取消权限：他人拒绝、admin 允许、本人允许", async () => {

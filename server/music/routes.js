@@ -67,6 +67,7 @@ export function createNeteaseMusicRouter({
   requireAuthenticated,
   presenceService = null,
   onQueueUpdated = null,
+  playbackController = null,
   env = process.env,
 }) {
   // 入队成功后通知音乐机器人管理器（绝不 await、绝不影响 HTTP 响应）
@@ -273,6 +274,41 @@ export function createNeteaseMusicRouter({
     };
   }
 
+  function getPublicQueueSnapshot(req) {
+    const snapshot = getQueueSnapshot(db, {
+      channelId: req.params.channelId,
+      viewer: currentViewer(req),
+    });
+    const state = playbackController?.getPlaybackState?.(
+      req.params.channelId
+    );
+    if (
+      snapshot.nowPlaying &&
+      state?.active === true &&
+      String(state.queueItemId) === snapshot.nowPlaying.id
+    ) {
+      snapshot.nowPlaying.playback.paused = state.paused === true;
+      snapshot.nowPlaying.playback.elapsedMs = Math.min(
+        snapshot.nowPlaying.playback.durationMs,
+        Math.max(0, Number(state.elapsedMs) || 0)
+      );
+    }
+    snapshot.controls = {
+      canControlPlayback: req.authUser.role === "admin",
+    };
+    return snapshot;
+  }
+
+  function requirePlaybackAdmin(req, res, next) {
+    if (req.authUser.role !== "admin") {
+      return res.status(403).json({
+        error: "只有管理员可以控制频道音乐播放",
+        code: "MUSIC_PLAYBACK_FORBIDDEN",
+      });
+    }
+    next();
+  }
+
   // 单曲点歌：前端只提交 playlistId/songId/trackIndex，
   // 歌曲元数据一律由服务端从网易云取回并标准化后入队
   router.post(
@@ -323,10 +359,7 @@ export function createNeteaseMusicRouter({
           playlistId,
         });
 
-        const snapshot = getQueueSnapshot(db, {
-          channelId: req.params.channelId,
-          viewer: currentViewer(req),
-        });
+        const snapshot = getPublicQueueSnapshot(req);
         const queueItemId = result.queueItemIds[0];
         const projected = snapshot.items.find((item) => item.id === queueItemId);
 
@@ -423,10 +456,7 @@ export function createNeteaseMusicRouter({
   // 共享队列快照：当前频道用户可见，按预计公平播放顺序返回
   router.get("/channels/:channelId/queue", requireInChannel, (req, res) => {
     try {
-      const snapshot = getQueueSnapshot(db, {
-        channelId: req.params.channelId,
-        viewer: currentViewer(req),
-      });
+      const snapshot = getPublicQueueSnapshot(req);
       return res.json(snapshot);
     } catch (error) {
       const handled = sendNeteaseError(res, error);
@@ -435,6 +465,53 @@ export function createNeteaseMusicRouter({
       return res.status(500).json({ error: "获取频道队列失败" });
     }
   });
+
+  router.post(
+    "/channels/:channelId/playback/pause",
+    requireInChannel,
+    requirePlaybackAdmin,
+    (req, res) => {
+      if (typeof req.body?.paused !== "boolean") {
+        return res.status(400).json({
+          error: "暂停状态无效",
+          code: "MUSIC_PLAYBACK_INVALID_STATE",
+        });
+      }
+      const result = playbackController?.setPaused?.(
+        req.params.channelId,
+        req.body.paused
+      );
+      if (!result?.active) {
+        return res.status(409).json({
+          error: "当前没有正在播放的歌曲",
+          code: "MUSIC_NOT_PLAYING",
+        });
+      }
+      return res.json({
+        success: true,
+        playback: {
+          paused: result.paused === true,
+          elapsedMs: Math.max(0, Number(result.elapsedMs) || 0),
+        },
+      });
+    }
+  );
+
+  router.post(
+    "/channels/:channelId/playback/skip",
+    requireInChannel,
+    requirePlaybackAdmin,
+    async (req, res) => {
+      const result = await playbackController?.skip?.(req.params.channelId);
+      if (!result?.changed) {
+        return res.status(409).json({
+          error: "当前没有可以切换的歌曲",
+          code: "MUSIC_NOT_PLAYING",
+        });
+      }
+      return res.json({ success: true });
+    }
+  );
 
   // 取消待播放歌曲：本人或 admin
   router.delete(

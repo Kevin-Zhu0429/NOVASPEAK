@@ -183,6 +183,7 @@ test("第一帧校准 started_at，快照返回安全且有界的播放进度", 
     startedAt: 5_000,
     elapsedMs: 1_250,
     durationMs: 240_000,
+    paused: false,
   });
   assert.equal(snapshot.nowPlaying.requester.isCurrentUser, true);
   assert.ok(!JSON.stringify(snapshot).includes("principal_key"));

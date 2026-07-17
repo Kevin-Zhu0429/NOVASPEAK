@@ -1602,6 +1602,7 @@ app.use(
     requireAuthenticated,
     presenceService: presence,
     onQueueUpdated: (channelId) => musicBotManager.kick(channelId),
+    playbackController: musicBotManager,
   })
 );
 

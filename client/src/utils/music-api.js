@@ -163,6 +163,46 @@ export async function getChannelMusicQueue(
 }
 
 /**
+ * 管理员暂停或继续当前频道的音乐播放。
+ */
+export async function setChannelMusicPaused(
+  apiBase,
+  channelId,
+  paused,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  if (typeof paused !== "boolean") throw new Error("暂停状态无效");
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/playback/pause`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused }),
+    },
+    { fetchImpl, fallbackError: paused ? "暂停播放失败" : "继续播放失败" }
+  );
+}
+
+/**
+ * 管理员跳过当前歌曲，公平队列继续消费下一首。
+ */
+export async function skipChannelMusicTrack(
+  apiBase,
+  channelId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/playback/skip`,
+    { method: "POST" },
+    { fetchImpl, fallbackError: "切换下一首失败" }
+  );
+}
+
+/**
  * 单曲点歌：只提交 playlistId/songId/trackIndex，
  * 歌曲元数据由服务端从网易云取回，不提交任何展示数据。
  */

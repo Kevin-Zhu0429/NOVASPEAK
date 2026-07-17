@@ -291,6 +291,7 @@ function toPublicNowPlaying(row, viewer, now) {
       startedAt,
       elapsedMs,
       durationMs,
+      paused: false,
     },
   };
 }

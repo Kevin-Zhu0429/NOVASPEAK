@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildNeteaseSongUrl,
   formatArtists,
   formatTrackCount,
   formatTrackDuration,
@@ -79,12 +78,13 @@ test("播放进度：无效数据安全归零", () => {
   });
 });
 
-test("网易云歌曲链接只接受十进制歌曲 ID", () => {
-  assert.equal(
-    buildNeteaseSongUrl("123456"),
-    "https://music.163.com/#/song?id=123456"
+test("播放进度：暂停期间不按本地时钟继续增长", () => {
+  assert.deepEqual(
+    getPlaybackProgress(
+      { elapsedMs: 45_000, durationMs: 180_000, paused: true },
+      1_000,
+      31_000
+    ),
+    { elapsedMs: 45_000, durationMs: 180_000, percent: 25 }
   );
-  for (const invalid of ["", "abc", "1&x=2", "1/2", "1".repeat(21)]) {
-    assert.equal(buildNeteaseSongUrl(invalid), null);
-  }
 });

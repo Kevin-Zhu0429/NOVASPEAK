@@ -6,7 +6,6 @@ import NetworkStats from "./NetworkStats";
 import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import MusicPanel from "../music/MusicPanel";
-import ChannelMusicStage from "../music/ChannelMusicStage";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
@@ -451,7 +450,6 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       {operationMessage && <div className="voice-operation-message">{operationMessage}</div>}
       <div className="voice-room-content">
         <section className="voice-chat-panel">
-          <ChannelMusicStage apiBase={apiBase} channelId={channel.id} />
           <div className="messages">
             {messages.length === 0 ? <div className="no-message">暂无聊天消息</div> : messages.map((message, index) => (
               <div key={`${message.time}-${index}`} className={message.sender === currentUser.displayName ? "message mine" : "message"}>
@@ -461,7 +459,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
           </div>
           <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
-        <VoiceParticipantList participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
+        <VoiceParticipantList apiBase={apiBase} participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
       {devicesOpen && <AudioDevicePanel devices={devices} inputId={inputId} outputId={outputId} onInput={switchInput} onOutput={switchOutput} busy={busy} micConstraints={micConstraints} onToggleMicConstraint={toggleMicConstraint} micConstraintError={micConstraintError} />}
       {musicOpen && <MusicPanel apiBase={apiBase} channelId={channel.id} onClose={() => setMusicOpen(false)} />}

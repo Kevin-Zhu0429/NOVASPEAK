@@ -17,7 +17,7 @@ export function parseParticipantMetadata(participant) {
   const displayName = typeof metadata.displayName === "string" && metadata.displayName.trim()
     ? metadata.displayName.trim()
     : participant?.name || participant?.identity || "未知用户";
-  const user = { displayName, role, isGuest: role === "guest" || metadata.isGuest === true, positions, positionNames, serverMuted: metadata.serverMuted === true };
+  const user = { displayName, role, isGuest: role === "guest" || metadata.isGuest === true, isMusicBot: metadata.isMusicBot === true, positions, positionNames, serverMuted: metadata.serverMuted === true };
   return { ...user, positionText: getPositionText(user, role ? "队员" : "身份未知") };
 }
 

@@ -67,7 +67,9 @@ export function getPlaybackProgress(
   const snapshotElapsedMs = Number.isFinite(playback?.elapsedMs)
     ? Math.max(0, playback.elapsedMs)
     : 0;
-  const localDelta = Number.isFinite(receivedAt) && Number.isFinite(now)
+  const localDelta = playback?.paused === true
+    ? 0
+    : Number.isFinite(receivedAt) && Number.isFinite(now)
     ? Math.max(0, now - receivedAt)
     : 0;
   const elapsedMs = Math.min(durationMs, snapshotElapsedMs + localDelta);
@@ -77,11 +79,4 @@ export function getPlaybackProgress(
     elapsedMs,
     percent: durationMs > 0 ? (elapsedMs / durationMs) * 100 : 0,
   };
-}
-
-export function buildNeteaseSongUrl(songId) {
-  const normalized = String(songId ?? "").trim();
-  return /^\d{1,20}$/.test(normalized)
-    ? `https://music.163.com/#/song?id=${normalized}`
-    : null;
 }

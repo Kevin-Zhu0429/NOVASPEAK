@@ -220,6 +220,108 @@ test("正常播放全部 finished，队列空后机器人离开", async () => {
   db.close();
 });
 
+test("暂停冻结 PCM 推送与共享进度，继续后从原位置完成", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  const songName = `歌-user-a-${songSeq - 1}`;
+  let clock = 1_000;
+  let captured = 0;
+  let resolveFirstFrame;
+  let releaseSecondFrame;
+  const firstFrame = new Promise((resolve) => { resolveFirstFrame = resolve; });
+  const secondFrame = new Promise((resolve) => { releaseSecondFrame = resolve; });
+  const { deps } = makeDeps({
+    createAudioSession: async () => ({
+      identity: "music-bot:cs2",
+      captureFrame: async () => { captured += 1; },
+      waitForPlayout: async () => {},
+      close: async () => {},
+    }),
+    decodeToFrames: async ({ onFrame }) => {
+      await onFrame(new Int16Array(960));
+      resolveFirstFrame();
+      await secondFrame;
+      await onFrame(new Int16Array(960));
+      return { framesDelivered: 2 };
+    },
+  });
+  const manager = createMusicBotManager({ db, ...deps, now: () => clock });
+  manager.kick("cs2");
+  await firstFrame;
+
+  clock = 1_500;
+  const paused = manager.setPaused("cs2", true);
+  assert.equal(paused.changed, true);
+  assert.equal(paused.paused, true);
+  assert.equal(paused.elapsedMs, 500);
+  releaseSecondFrame();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(captured, 1);
+
+  clock = 8_000;
+  assert.equal(manager.getPlaybackState("cs2").elapsedMs, 500);
+  const resumed = manager.setPaused("cs2", false);
+  assert.equal(resumed.paused, false);
+  assert.equal(resumed.elapsedMs, 500);
+  await drain(manager);
+  assert.equal(captured, 2);
+  assert.equal(statusOf(db, songName), "finished");
+  db.close();
+});
+
+test("下一首跳过当前项并继续公平顺序，不恢复或吞掉后续歌曲", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 2);
+  enqueue(db, "user-b", 1);
+  const rowsBefore = db
+    .prepare("SELECT id, song_name FROM music_queue_items ORDER BY id")
+    .all();
+  const order = [];
+  let decodeCalls = 0;
+  const { deps } = makeDeps({
+    getSongPlaybackUrl: async ({ songId }) => {
+      order.push(
+        db.prepare("SELECT song_name FROM music_queue_items WHERE song_id = ?").get(songId).song_name
+      );
+      return { url: "https://m701.music.126.net/x.mp3" };
+    },
+    decodeToFrames: async ({ onFrame, signal }) => {
+      decodeCalls += 1;
+      if (decodeCalls === 1) {
+        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+        const error = new Error("skipped");
+        error.code = "FFMPEG_ABORTED";
+        throw error;
+      }
+      await onFrame(new Int16Array(960));
+      return { framesDelivered: 1 };
+    },
+  });
+  const manager = createMusicBotManager({ db, ...deps });
+  manager.kick("cs2");
+  while (!manager.getPlaybackState("cs2").active) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  const skipped = await manager.skip("cs2");
+  assert.equal(skipped.changed, true);
+  await drain(manager);
+
+  const statuses = db
+    .prepare("SELECT song_name, status FROM music_queue_items ORDER BY id")
+    .all();
+  assert.deepEqual(statuses, [
+    { song_name: rowsBefore[0].song_name, status: "skipped" },
+    { song_name: rowsBefore[1].song_name, status: "finished" },
+    { song_name: rowsBefore[2].song_name, status: "finished" },
+  ]);
+  assert.deepEqual(order, [
+    rowsBefore[0].song_name,
+    rowsBefore[2].song_name,
+    rowsBefore[1].song_name,
+  ]);
+  db.close();
+});
+
 test("A1→B1→A2→B2 公平消费顺序", async () => {
   const db = createDb();
   // A 先加 3 首，B 加 2 首

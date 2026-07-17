@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Mic, MicOff, MoreHorizontal, Signal } from "lucide-react";
+import { Mic, MicOff, MoreHorizontal, Music, Pause, Play, Signal, SkipForward } from "lucide-react";
 import { formatLoss, qualityLabel } from "../../utils/voice-network";
+import { formatArtists, formatTrackDuration } from "../../utils/music-format";
 import { getMemberStatusBadges } from "../../utils/voice-member-menu";
 import { getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
 import { createLongPressTracker, shouldIgnoreLongPressTarget } from "../../utils/long-press";
@@ -9,7 +10,7 @@ import VoiceMemberContextMenu from "./VoiceMemberContextMenu";
 import MemberProfileDialog from "./MemberProfileDialog";
 import UserAvatar from "../common/UserAvatar";
 
-function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
+function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, currentChannel, channels, busy, anyBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted, musicStatus }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const buttonRef = useRef(null);
@@ -18,6 +19,7 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
   const statusBadges = getMemberStatusBadges({ serverMuted: item.serverMuted, localMuted: !item.isLocal && localPref.muted });
   // LiveKit metadata 不含头像：本人用 currentUser，其余成员用 Presence 在线数据
   const avatarUrl = resolveParticipantAvatarUrl({ isLocal: item.isLocal, displayName: item.displayName, currentUser, onlineMembers });
+  const musicNowPlaying = item.isMusicBot ? musicStatus?.nowPlaying : null;
 
   // 手机端补充入口：长按卡片 550ms 打开菜单（不影响滚动和按钮点击）
   const [longPress] = useState(() => createLongPressTracker({ onLongPress: (point) => setContextMenu({ x: point.x, y: point.y }) }));
@@ -55,24 +57,57 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
 
   return (
     <article
-      className={`voice-participant-card ${item.isSpeaking ? "speaking" : ""} ${busy ? "operating" : ""}`}
+      className={`voice-participant-card ${item.isSpeaking ? "speaking" : ""} ${busy ? "operating" : ""} ${musicNowPlaying ? "music-bot-playing" : ""}`}
       onContextMenu={openContextMenu}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={() => longPress.cancel()}
       onTouchCancel={() => longPress.cancel()}
     >
-      <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="md" status={item.isSpeaking ? "speaking" : ""} />
-      <div className="voice-participant-copy">
-        <strong>{item.displayName}{item.isLocal ? "（我）" : ""}</strong>
-        <span>{item.positionText}</span>
-        <small>{busy ? "操作中..." : item.serverMuted ? "已被服务器静音" : item.isSpeaking ? "正在说话" : item.microphoneEnabled ? "麦克风开启" : "麦克风关闭"}</small>
-        {!item.isLocal && Number.isFinite(receiveLoss) && <small>本机接收丢包 {formatLoss(receiveLoss)}</small>}
-      </div>
-      <div className="voice-participant-state" title={`网络质量：${qualityLabel(item.connectionQuality)}`}>
-        <Signal size={17} /><span>{qualityLabel(item.connectionQuality)}</span>
-        {item.microphoneEnabled && !item.serverMuted ? <Mic size={17} /> : <MicOff size={17} />}
-      </div>
+      {musicNowPlaying ? (
+        <MusicBotCover
+          picUrl={musicNowPlaying.song.album?.picUrl}
+          songName={musicNowPlaying.song.name}
+        />
+      ) : (
+        <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="md" status={item.isSpeaking ? "speaking" : ""} />
+      )}
+      {musicNowPlaying ? (
+        <div className="music-bot-participant-copy">
+          <strong title={musicNowPlaying.song.name}>{musicNowPlaying.song.name}</strong>
+          <span title={formatArtists(musicNowPlaying.song.artists)}>{formatArtists(musicNowPlaying.song.artists)}</span>
+          <small>{musicNowPlaying.requester.displayName}{musicNowPlaying.requester.isCurrentUser ? "（我）" : ""} 点歌</small>
+          <div className="music-bot-card-progress-row">
+            <div className="music-bot-card-progress" role="progressbar" aria-label="歌曲播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(musicStatus.progress?.percent || 0)}>
+              <span style={{ width: `${musicStatus.progress?.percent || 0}%` }} />
+            </div>
+            <span>{formatTrackDuration(musicStatus.progress?.elapsedMs || 0)} / {formatTrackDuration(musicStatus.progress?.durationMs || 0)}</span>
+          </div>
+          <div className="music-bot-card-controls">
+            <button type="button" onClick={musicStatus.togglePaused} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? (musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放") : "仅管理员可控制"} aria-label={musicNowPlaying.playback?.paused ? "继续播放" : "暂停播放"}>
+              {musicNowPlaying.playback?.paused ? <Play size={14} /> : <Pause size={14} />}
+              <span>{musicNowPlaying.playback?.paused ? "继续" : "暂停"}</span>
+            </button>
+            <button type="button" onClick={musicStatus.skip} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? "下一首" : "仅管理员可控制"} aria-label="下一首">
+              <SkipForward size={14} /><span>下一首</span>
+            </button>
+            {musicStatus.error && <em title={musicStatus.error}>控制状态异常</em>}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="voice-participant-copy">
+            <strong>{item.displayName}{item.isLocal ? "（我）" : ""}</strong>
+            <span>{item.positionText}</span>
+            <small>{busy ? "操作中..." : item.serverMuted ? "已被服务器静音" : item.isSpeaking ? "正在说话" : item.microphoneEnabled ? "麦克风开启" : "麦克风关闭"}</small>
+            {!item.isLocal && Number.isFinite(receiveLoss) && <small>本机接收丢包 {formatLoss(receiveLoss)}</small>}
+          </div>
+          <div className="voice-participant-state" title={`网络质量：${qualityLabel(item.connectionQuality)}`}>
+            <Signal size={17} /><span>{qualityLabel(item.connectionQuality)}</span>
+            {item.microphoneEnabled && !item.serverMuted ? <Mic size={17} /> : <MicOff size={17} />}
+          </div>
+        </>
+      )}
       <div className="voice-member-actions">
         <button ref={buttonRef} type="button" className="voice-member-menu-button" onClick={toggleMenuFromButton} disabled={busy || anyBusy} aria-label="成员菜单" aria-haspopup="menu" aria-expanded={Boolean(contextMenu)}>
           <MoreHorizontal size={17} />
@@ -113,6 +148,26 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
         />
       )}
     </article>
+  );
+}
+
+function MusicBotCover({ picUrl, songName }) {
+  const [failedUrl, setFailedUrl] = useState("");
+  const showImage = typeof picUrl === "string" && picUrl && picUrl !== failedUrl;
+  return (
+    <span className="music-bot-cover-avatar">
+      {showImage ? (
+        <img
+          src={picUrl}
+          alt={`${songName || "当前歌曲"}封面`}
+          referrerPolicy="no-referrer"
+          draggable={false}
+          onError={() => setFailedUrl(picUrl)}
+        />
+      ) : (
+        <Music aria-hidden="true" />
+      )}
+    </span>
   );
 }
 export default memo(VoiceParticipantCard);

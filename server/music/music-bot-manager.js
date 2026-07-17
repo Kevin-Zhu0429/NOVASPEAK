@@ -114,12 +114,95 @@ export function createMusicBotManager({
   scanIntervalMs = DEFAULT_SCAN_INTERVAL_MS,
   backoffInitialMs = DEFAULT_BACKOFF_INITIAL_MS,
   backoffMaxMs = DEFAULT_BACKOFF_MAX_MS,
+  now = () => Date.now(),
   logger = console,
 }) {
   const runtime = ffmpegRuntime || createFfmpegRuntime({ env });
   const workers = new Map(); // channelId -> { promise, abortController }
   let stopped = false;
   let scanTimer = null;
+
+  function createPlaybackControl() {
+    return {
+      queueItemId: null,
+      startedAtMs: null,
+      paused: false,
+      pausedAtMs: null,
+      totalPausedMs: 0,
+      skipRequested: false,
+      songAbortController: null,
+      resumeWaiters: new Set(),
+    };
+  }
+
+  function wakePlaybackControl(control) {
+    const waiters = [...control.resumeWaiters];
+    control.resumeWaiters.clear();
+    for (const resolve of waiters) resolve();
+  }
+
+  function resetPlaybackControl(control) {
+    wakePlaybackControl(control);
+    control.queueItemId = null;
+    control.startedAtMs = null;
+    control.paused = false;
+    control.pausedAtMs = null;
+    control.totalPausedMs = 0;
+    control.skipRequested = false;
+    control.songAbortController = null;
+  }
+
+  function setControlPaused(control, paused) {
+    if (!control.queueItemId || control.paused === paused) return false;
+    const timestamp = now();
+    if (paused) {
+      control.paused = true;
+      if (control.startedAtMs !== null) control.pausedAtMs = timestamp;
+      return true;
+    }
+    if (control.startedAtMs !== null && control.pausedAtMs !== null) {
+      control.totalPausedMs += Math.max(0, timestamp - control.pausedAtMs);
+    }
+    control.paused = false;
+    control.pausedAtMs = null;
+    wakePlaybackControl(control);
+    return true;
+  }
+
+  async function waitWhilePaused(control, signal) {
+    while (control.paused && !signal.aborted && !control.skipRequested) {
+      await new Promise((resolve) => {
+        const finish = () => {
+          signal.removeEventListener("abort", finish);
+          control.resumeWaiters.delete(finish);
+          resolve();
+        };
+        control.resumeWaiters.add(finish);
+        signal.addEventListener("abort", finish, { once: true });
+      });
+    }
+  }
+
+  function getControlSnapshot(control) {
+    if (!control?.queueItemId) {
+      return { active: false, queueItemId: null, paused: false, elapsedMs: 0 };
+    }
+    const referenceMs = control.paused && control.pausedAtMs !== null
+      ? control.pausedAtMs
+      : now();
+    const elapsedMs = control.startedAtMs === null
+      ? 0
+      : Math.max(
+          0,
+          referenceMs - control.startedAtMs - control.totalPausedMs
+        );
+    return {
+      active: true,
+      queueItemId: String(control.queueItemId),
+      paused: control.paused,
+      elapsedMs,
+    };
+  }
 
   function log(level, message, errorOrCode) {
     try {
@@ -172,7 +255,14 @@ export function createMusicBotManager({
     });
   }
 
-  async function playOneSong({ channelId, receipt, ffmpegPath, signal, sessionBox }) {
+  async function playOneSong({
+    channelId,
+    receipt,
+    ffmpegPath,
+    signal,
+    sessionBox,
+    control,
+  }) {
     const item = receipt.queueItem;
 
     // 点歌者自己的凭据：A 的歌只能用 A 的 Cookie
@@ -198,13 +288,31 @@ export function createMusicBotManager({
       signal,
       env,
       onFrame: async (frame) => {
+        await waitWhilePaused(control, signal);
+        if (signal.aborted || control.skipRequested) {
+          const error = new Error("音乐播放已中止");
+          error.code = "FFMPEG_ABORTED";
+          throw error;
+        }
         if (!playbackStarted) {
           playbackStarted = true;
-          markQueueItemPlaybackStarted(db, { queueItemId: item.id });
+          const startedAt = now();
+          control.startedAtMs = startedAt;
+          control.pausedAtMs = null;
+          control.totalPausedMs = 0;
+          markQueueItemPlaybackStarted(db, {
+            queueItemId: item.id,
+            now: startedAt,
+          });
         }
         await session.captureFrame(frame);
       },
     });
+    if (control.skipRequested) {
+      const error = new Error("管理员已切换下一首");
+      error.code = "MUSIC_BOT_ADMIN_SKIP";
+      throw error;
+    }
     await session.waitForPlayout();
   }
 
@@ -219,9 +327,13 @@ export function createMusicBotManager({
     }
   }
 
-  async function runWorker(channelId, abortController) {
+  async function runWorker(
+    channelId,
+    abortController,
+    sessionBox,
+    control
+  ) {
     const signal = abortController.signal;
-    const sessionBox = { session: null };
     let backoffMs = 0;
 
     try {
@@ -249,13 +361,26 @@ export function createMusicBotManager({
         const receipt = claimNextQueueItem(db, { channelId });
         if (!receipt) break;
 
+        control.queueItemId = String(receipt.queueItem.id);
+        control.startedAtMs = null;
+        control.paused = false;
+        control.pausedAtMs = null;
+        control.totalPausedMs = 0;
+        control.skipRequested = false;
+        const songAbortController = new AbortController();
+        control.songAbortController = songAbortController;
+        const abortSong = () => songAbortController.abort();
+        if (signal.aborted) abortSong();
+        else signal.addEventListener("abort", abortSong, { once: true });
+
         try {
           await playOneSong({
             channelId,
             receipt,
             ffmpegPath,
-            signal,
+            signal: songAbortController.signal,
             sessionBox,
+            control,
           });
           finishQueueItem(db, {
             queueItemId: receipt.queueItem.id,
@@ -263,6 +388,17 @@ export function createMusicBotManager({
           });
           backoffMs = 0; // 成功一首清除退避
         } catch (error) {
+          if (control.skipRequested) {
+            await closeSession(sessionBox);
+            finishQueueItem(db, {
+              queueItemId: receipt.queueItem.id,
+              outcome: "skipped",
+              failureCode: "SKIPPED_BY_ADMIN",
+            });
+            log("info", "管理员已切换下一首", "SKIPPED_BY_ADMIN");
+            backoffMs = 0;
+            continue;
+          }
           const classification = classifyPlaybackError(error);
           if (classification === "requeue") {
             // 基础设施故障：恢复公平位置，不快速领取下一首
@@ -295,6 +431,9 @@ export function createMusicBotManager({
               error
             );
           }
+        } finally {
+          signal.removeEventListener("abort", abortSong);
+          resetPlaybackControl(control);
         }
       }
     } finally {
@@ -311,7 +450,14 @@ export function createMusicBotManager({
     if (workers.has(channelId)) return; // 同频道只有一个 worker
 
     const abortController = new AbortController();
-    const promise = runWorker(channelId, abortController)
+    const sessionBox = { session: null };
+    const control = createPlaybackControl();
+    const promise = runWorker(
+      channelId,
+      abortController,
+      sessionBox,
+      control
+    )
       .catch((error) => {
         // 顶层兜底：任何 worker 异常都不得外溢
         log("error", "播放任务异常结束", error?.code);
@@ -319,7 +465,40 @@ export function createMusicBotManager({
       .finally(() => {
         workers.delete(channelId);
       });
-    workers.set(channelId, { promise, abortController });
+    workers.set(channelId, {
+      promise,
+      abortController,
+      sessionBox,
+      control,
+    });
+  }
+
+  function getPlaybackState(channelId) {
+    return getControlSnapshot(workers.get(channelId)?.control);
+  }
+
+  function setPaused(channelId, paused) {
+    const worker = workers.get(channelId);
+    if (!worker?.control?.queueItemId) {
+      return { changed: false, ...getPlaybackState(channelId) };
+    }
+    const changed = setControlPaused(worker.control, paused === true);
+    return { changed, ...getControlSnapshot(worker.control) };
+  }
+
+  async function skip(channelId) {
+    const worker = workers.get(channelId);
+    const control = worker?.control;
+    if (!worker || !control?.queueItemId || control.skipRequested) {
+      return { changed: false, ...getPlaybackState(channelId) };
+    }
+    control.skipRequested = true;
+    setControlPaused(control, false);
+    control.songAbortController?.abort();
+    // 立即关闭音频会话以清掉 AudioSource 内最多约 200ms 的残余缓冲；
+    // worker 会在 catch 中把当前项标记 skipped，再创建新会话播放下一首。
+    await closeSession(worker.sessionBox);
+    return { changed: true, ...getControlSnapshot(control) };
   }
 
   function scan() {
@@ -364,6 +543,9 @@ export function createMusicBotManager({
     stop,
     kick,
     scan,
+    getPlaybackState,
+    setPaused,
+    skip,
     get activeChannelCount() {
       return workers.size;
     },

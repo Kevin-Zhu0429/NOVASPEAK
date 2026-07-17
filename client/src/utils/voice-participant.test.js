@@ -16,6 +16,21 @@ test("server mute only follows explicit metadata boolean", () => {
   assert.equal(isParticipantServerMuted({ metadata: JSON.stringify({ serverMuted: false }) }), false);
 });
 
+test("音乐机器人标记从 LiveKit metadata 安全映射到成员卡片", async () => {
+  const { participantView } = await import("./voice-participant.js");
+  const view = participantView({
+    identity: "music-bot:cs2",
+    name: "音乐机器人",
+    metadata: JSON.stringify({
+      displayName: "音乐机器人",
+      isMusicBot: true,
+    }),
+    getTrackPublication: () => null,
+  });
+  assert.equal(view.isMusicBot, true);
+  assert.equal(view.displayName, "音乐机器人");
+});
+
 test("local microphone mute is not server mute", () => {
   const participant = {
     identity: "u1",

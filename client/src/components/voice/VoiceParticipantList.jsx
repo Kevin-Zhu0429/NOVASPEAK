@@ -1,9 +1,15 @@
 import VoiceParticipantCard from "./VoiceParticipantCard";
 import OnlineMembersPanel from "../presence/OnlineMembersPanel";
 import { useState } from "react";
+import useChannelMusicStatus from "../../hooks/useChannelMusicStatus";
 
-export default function VoiceParticipantList({ participants, participantLoss, onlineMembers, presenceStatus, currentUser, currentChannel, channels, participantBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
+export default function VoiceParticipantList({ apiBase, participants, participantLoss, onlineMembers, presenceStatus, currentUser, currentChannel, channels, participantBusy, onManageParticipant, localAudioPrefs, onSetMemberVolume, onSetMemberLocalMuted }) {
   const [tab, setTab] = useState("channel");
+  const musicStatus = useChannelMusicStatus({
+    apiBase,
+    channelId: currentChannel?.id,
+    enabled: tab === "channel",
+  });
   return (
     <aside className="voice-participants-panel">
       <div className="member-panel-tabs">
@@ -28,6 +34,7 @@ export default function VoiceParticipantList({ participants, participantLoss, on
               localAudioPrefs={localAudioPrefs}
               onSetMemberVolume={onSetMemberVolume}
               onSetMemberLocalMuted={onSetMemberLocalMuted}
+              musicStatus={musicStatus}
             />
           ))}
         </div>

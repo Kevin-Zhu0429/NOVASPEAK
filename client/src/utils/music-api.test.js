@@ -9,6 +9,8 @@ import {
   getNeteaseAccount,
   getNeteasePlaylists,
   getNeteasePlaylistTracks,
+  setChannelMusicPaused,
+  skipChannelMusicTrack,
   unbindNeteaseSession,
 } from "./music-api.js";
 
@@ -273,6 +275,37 @@ test("获取频道队列：路径编码 + credentials + AbortSignal", async () =
   );
 
   await assert.rejects(() => getChannelMusicQueue("", "", { fetchImpl }), /频道无效/);
+});
+
+test("管理员播放控制：暂停/继续与下一首使用固定频道路由", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { success: true, playback: { paused: true, elapsedMs: 1234 } })
+  );
+  const paused = await setChannelMusicPaused(
+    "http://api.test",
+    "频道/1",
+    true,
+    { fetchImpl }
+  );
+  assert.equal(paused.playback.paused, true);
+  assert.equal(
+    calls[0].url,
+    "http://api.test/api/music/netease/channels/%E9%A2%91%E9%81%93%2F1/playback/pause"
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { paused: true });
+
+  await skipChannelMusicTrack("", "cs2", { fetchImpl });
+  assert.equal(
+    calls[1].url,
+    "/api/music/netease/channels/cs2/playback/skip"
+  );
+  assert.equal(calls[1].options.method, "POST");
+
+  await assert.rejects(
+    () => setChannelMusicPaused("", "cs2", "yes", { fetchImpl }),
+    /暂停状态无效/
+  );
 });
 
 test("单曲点歌：请求体只含 playlistId/songId/trackIndex", async () => {
