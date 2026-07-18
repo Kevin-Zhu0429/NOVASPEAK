@@ -35,6 +35,8 @@ import {
   enqueueTracks,
   getQueueSnapshot,
   getRemainingQueueCapacity,
+  prioritizeQueueItem,
+  shufflePendingQueue,
 } from "./music-queue.js";
 
 function sendNeteaseError(res, error) {
@@ -511,6 +513,53 @@ export function createNeteaseMusicRouter({
         });
       }
       return res.json({ success: true });
+    }
+  );
+
+  // 随机播放：只洗牌每个用户桶内部的普通待播歌曲，跨用户公平交替不变。
+  router.post(
+    "/channels/:channelId/queue/shuffle",
+    requireInChannel,
+    requirePlaybackMember,
+    (req, res) => {
+      try {
+        const result = shufflePendingQueue(db, {
+          channelId: req.params.channelId,
+        });
+        notifyQueueUpdated(req.params.channelId);
+        return res.json({ success: true, ...result });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music queue shuffle error:", error?.message);
+        return res.status(500).json({ error: "随机排序失败" });
+      }
+    }
+  );
+
+  // 优先播放：成员可把某个 pending 项设为全频道下一首；播放后公平游标续接。
+  router.post(
+    "/channels/:channelId/queue/:queueItemId/prioritize",
+    requireInChannel,
+    requirePlaybackMember,
+    (req, res) => {
+      try {
+        const queueItemId = req.params.queueItemId;
+        if (!QUEUE_ITEM_ID_PATTERN.test(queueItemId)) {
+          return res.status(400).json({ error: "队列项编号无效" });
+        }
+        const result = prioritizeQueueItem(db, {
+          channelId: req.params.channelId,
+          queueItemId: Number(queueItemId),
+        });
+        notifyQueueUpdated(req.params.channelId);
+        return res.json({ success: true, revision: result.revision });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music queue prioritize error:", error?.message);
+        return res.status(500).json({ error: "设置优先播放失败" });
+      }
     }
   );
 

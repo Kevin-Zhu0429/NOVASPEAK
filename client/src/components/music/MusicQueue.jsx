@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Music, X } from "lucide-react";
+import { Music, Pin, Shuffle, X } from "lucide-react";
 import {
   cancelMusicQueueItem,
   getChannelMusicQueue,
+  prioritizeChannelMusicQueueItem,
+  shuffleChannelMusicQueue,
 } from "../../utils/music-api";
 import { formatArtists, formatTrackDuration } from "../../utils/music-format";
 
@@ -15,6 +17,7 @@ export default function MusicQueue({ apiBase, channelId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [cancelBusyId, setCancelBusyId] = useState("");
+  const [queueActionBusy, setQueueActionBusy] = useState("");
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
 
@@ -75,15 +78,67 @@ export default function MusicQueue({ apiBase, channelId }) {
     }
   };
 
+  const shuffleQueue = async () => {
+    if (queueActionBusy) return;
+    setQueueActionBusy("shuffle");
+    setError("");
+    try {
+      await shuffleChannelMusicQueue(apiBase, channelId);
+      if (mountedRef.current) await refresh();
+    } catch (shuffleError) {
+      if (mountedRef.current) {
+        setError(shuffleError.message || "随机排序失败");
+      }
+    } finally {
+      if (mountedRef.current) setQueueActionBusy("");
+    }
+  };
+
+  const prioritizeItem = async (item) => {
+    if (queueActionBusy) return;
+    setQueueActionBusy(`prioritize:${item.id}`);
+    setError("");
+    try {
+      await prioritizeChannelMusicQueueItem(apiBase, channelId, item.id);
+      if (mountedRef.current) await refresh();
+    } catch (prioritizeError) {
+      if (mountedRef.current) {
+        setError(prioritizeError.message || "设置优先播放失败");
+      }
+    } finally {
+      if (mountedRef.current) setQueueActionBusy("");
+    }
+  };
+
   if (loading) {
     return <div className="music-panel-loading">正在加载频道队列……</div>;
   }
 
   const items = snapshot?.items || [];
   const nowPlaying = snapshot?.nowPlaying || null;
+  const canControlQueue = snapshot?.controls?.canControlPlayback === true;
 
   return (
     <div className="music-queue-section">
+      <div className="music-queue-toolbar">
+        <span>
+          待播放 {items.length} 首
+          <small>随机播放仍保留用户交替顺序</small>
+        </span>
+        {canControlQueue && (
+          <button
+            type="button"
+            className="music-queue-shuffle-button"
+            onClick={shuffleQueue}
+            disabled={Boolean(queueActionBusy) || items.length < 2}
+            title="打乱每位用户各自歌曲的顺序，用户之间仍公平交替"
+          >
+            <Shuffle />
+            随机播放
+          </button>
+        )}
+      </div>
+
       {nowPlaying && (
         <div className="music-queue-now-playing">
           <QueueCover picUrl={nowPlaying.song.album?.picUrl} />
@@ -118,6 +173,9 @@ export default function MusicQueue({ apiBase, channelId }) {
               <QueueCover picUrl={item.song.album?.picUrl} />
               <span className="music-track-main">
                 <strong className="music-track-name">{item.song.name}</strong>
+                {item.prioritized && (
+                  <span className="music-queue-priority-tag">下一首优先</span>
+                )}
                 <span className="music-track-meta">
                   {formatArtists(item.song.artists)} ·{" "}
                   {formatTrackDuration(item.song.durationMs)}
@@ -127,18 +185,32 @@ export default function MusicQueue({ apiBase, channelId }) {
                   {item.requester.isCurrentUser ? "（我）" : ""} 点歌
                 </span>
               </span>
-              {item.canCancel && (
-                <button
-                  type="button"
-                  className="music-queue-cancel-button"
-                  onClick={() => cancelItem(item)}
-                  disabled={Boolean(cancelBusyId)}
-                  aria-label={`取消 ${item.song.name}`}
-                  title="取消这首歌"
-                >
-                  <X />
-                </button>
-              )}
+              <span className="music-queue-item-actions">
+                {canControlQueue && !item.prioritized && (
+                  <button
+                    type="button"
+                    className="music-queue-prioritize-button"
+                    onClick={() => prioritizeItem(item)}
+                    disabled={Boolean(queueActionBusy)}
+                    aria-label={`优先播放 ${item.song.name}`}
+                    title="设为下一首播放"
+                  >
+                    <Pin />
+                  </button>
+                )}
+                {item.canCancel && (
+                  <button
+                    type="button"
+                    className="music-queue-cancel-button"
+                    onClick={() => cancelItem(item)}
+                    disabled={Boolean(cancelBusyId)}
+                    aria-label={`取消 ${item.song.name}`}
+                    title="取消这首歌"
+                  >
+                    <X />
+                  </button>
+                )}
+              </span>
             </li>
           ))}
         </ul>

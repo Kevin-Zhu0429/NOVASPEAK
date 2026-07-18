@@ -203,6 +203,44 @@ export async function skipChannelMusicTrack(
 }
 
 /**
+ * 随机打乱频道中各用户桶内部的待播歌曲；服务端保留跨用户公平交替。
+ */
+export async function shuffleChannelMusicQueue(
+  apiBase,
+  channelId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/shuffle`,
+    { method: "POST" },
+    { fetchImpl, fallbackError: "随机排序失败" }
+  );
+}
+
+/**
+ * 将某个待播歌曲设置为下一首播放。
+ */
+export async function prioritizeChannelMusicQueueItem(
+  apiBase,
+  channelId,
+  queueItemId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  if (typeof queueItemId !== "string" || !queueItemId.trim()) {
+    throw new Error("队列项无效");
+  }
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/${encodeURIComponent(queueItemId.trim())}/prioritize`,
+    { method: "POST" },
+    { fetchImpl, fallbackError: "设置优先播放失败" }
+  );
+}
+
+/**
  * 单曲点歌：只提交 playlistId/songId/trackIndex，
  * 歌曲元数据由服务端从网易云取回，不提交任何展示数据。
  */

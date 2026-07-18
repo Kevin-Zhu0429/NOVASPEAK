@@ -7,7 +7,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import {
   backupBeforeMusicQueueMigration,
+  backupBeforeMusicQueueOrderingMigration,
   migrateMusicQueue,
+  musicQueueOrderingColumnsExist,
   musicQueueTablesExist,
 } from "./queue-migrate.js";
 
@@ -230,6 +232,72 @@ test("每频道最多一个 playing 项目（partial unique index）", async () 
     `);
     insert.run("1", now);
     assert.throws(() => insert.run("2", now), /UNIQUE/);
+    db.close();
+  } finally {
+    await fsPromises.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("旧队列表升级排序字段前备份，回填顺序且重复启动不再备份", async () => {
+  const tempRoot = await makeTempDir();
+  try {
+    const databasePath = path.join(tempRoot, "novaspeak.db");
+    let db = createBaseDatabase(databasePath);
+    migrateMusicQueue(db);
+    db.exec(`
+      DROP TABLE music_queue_items;
+      CREATE TABLE music_queue_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        principal_key TEXT NOT NULL,
+        requester_display_name TEXT NOT NULL,
+        song_id TEXT NOT NULL,
+        song_name TEXT NOT NULL,
+        artists_json TEXT NOT NULL,
+        album_id TEXT,
+        album_name TEXT,
+        cover_url TEXT,
+        duration_ms INTEGER NOT NULL,
+        fee INTEGER,
+        playlist_id TEXT,
+        playlist_track_index INTEGER,
+        status TEXT NOT NULL,
+        added_at INTEGER NOT NULL,
+        started_at INTEGER,
+        finished_at INTEGER,
+        failure_code TEXT
+      );
+      INSERT INTO music_queue_items (
+        channel_id, principal_key, requester_display_name,
+        song_id, song_name, artists_json, duration_ms, status, added_at
+      ) VALUES ('cs2', 'user-a', 'A', '1', '旧歌', '[]', 1000, 'pending', 1);
+    `);
+    assert.equal(musicQueueOrderingColumnsExist(db), false);
+
+    const backup = await backupBeforeMusicQueueOrderingMigration(db, {
+      databasePath,
+      preExistingDatabase: true,
+      now: new Date("2026-07-18T12:34:56Z"),
+    });
+    assert.equal(backup.backedUp, true);
+    assert.match(
+      path.basename(backup.backupPath),
+      /^novaspeak-before-music-queue-ordering-\d{8}T\d{6}\.db$/
+    );
+
+    migrateMusicQueue(db);
+    assert.equal(musicQueueOrderingColumnsExist(db), true);
+    assert.deepEqual(
+      db.prepare(
+        "SELECT id, queue_order, priority_order FROM music_queue_items"
+      ).get(),
+      { id: 1, queue_order: 1, priority_order: 0 }
+    );
+    const second = await backupBeforeMusicQueueOrderingMigration(db, {
+      databasePath,
+      preExistingDatabase: true,
+    });
+    assert.deepEqual(second, { backedUp: false, reason: "already-migrated" });
     db.close();
   } finally {
     await fsPromises.rm(tempRoot, { recursive: true, force: true });

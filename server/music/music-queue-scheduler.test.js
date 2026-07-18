@@ -120,6 +120,24 @@ test("桶内部严格 FIFO", () => {
   assert.deepEqual(labels(projected), ["A1", "A2", "A3"]);
 });
 
+test("queueOrder 可改变桶内顺序，同时不改变跨用户轮询", () => {
+  const projected = projectFairQueue({
+    buckets: [
+      { principalKey: "A", bucketOrder: 1 },
+      { principalKey: "B", bucketOrder: 2 },
+    ],
+    pendingItems: [
+      { id: 1, queueOrder: 30, principalKey: "A", label: "A1" },
+      { id: 2, queueOrder: 10, principalKey: "A", label: "A2" },
+      { id: 3, queueOrder: 20, principalKey: "A", label: "A3" },
+      { id: 4, queueOrder: 20, principalKey: "B", label: "B1" },
+      { id: 5, queueOrder: 10, principalKey: "B", label: "B2" },
+    ],
+    lastServedBucketOrder: 0,
+  });
+  assert.deepEqual(labels(projected), ["A2", "B2", "A3", "B1", "A1"]);
+});
+
 test("中间用户桶为空时被跳过", () => {
   const projected = projectFairQueue({
     buckets: [

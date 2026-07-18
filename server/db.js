@@ -10,6 +10,7 @@ import {
 } from "./music/migrate.js";
 import {
   backupBeforeMusicQueueMigration,
+  backupBeforeMusicQueueOrderingMigration,
   migrateMusicQueue,
 } from "./music/queue-migrate.js";
 
@@ -201,6 +202,15 @@ const musicQueueBackup = await backupBeforeMusicQueueMigration(db, {
 if (musicQueueBackup.backedUp) {
   console.log(
     `Database backup created before music queue migration: ${musicQueueBackup.backupPath}`
+  );
+}
+const musicQueueOrderingBackup = await backupBeforeMusicQueueOrderingMigration(
+  db,
+  { databasePath, preExistingDatabase }
+);
+if (musicQueueOrderingBackup.backedUp) {
+  console.log(
+    `Database backup created before music queue ordering migration: ${musicQueueOrderingBackup.backupPath}`
   );
 }
 migrateMusicQueue(db);
