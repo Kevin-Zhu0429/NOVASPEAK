@@ -9,7 +9,9 @@ import {
   getNeteaseAccount,
   getNeteasePlaylists,
   getNeteasePlaylistTracks,
+  prioritizeChannelMusicQueueItem,
   setChannelMusicPaused,
+  shuffleChannelMusicQueue,
   skipChannelMusicTrack,
   unbindNeteaseSession,
 } from "./music-api.js";
@@ -305,6 +307,35 @@ test("管理员播放控制：暂停/继续与下一首使用固定频道路由"
   await assert.rejects(
     () => setChannelMusicPaused("", "cs2", "yes", { fetchImpl }),
     /暂停状态无效/
+  );
+});
+
+test("队列随机与优先播放使用固定 POST 路由", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { success: true, revision: 8 })
+  );
+  await shuffleChannelMusicQueue("http://api.test", "频道/1", { fetchImpl });
+  await prioritizeChannelMusicQueueItem(
+    "http://api.test",
+    "频道/1",
+    "42",
+    { fetchImpl }
+  );
+  assert.equal(
+    calls[0].url,
+    "http://api.test/api/music/netease/channels/%E9%A2%91%E9%81%93%2F1/queue/shuffle"
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(
+    calls[1].url,
+    "http://api.test/api/music/netease/channels/%E9%A2%91%E9%81%93%2F1/queue/42/prioritize"
+  );
+  assert.equal(calls[1].options.method, "POST");
+  assert.equal(calls[1].options.credentials, "include");
+
+  await assert.rejects(
+    () => prioritizeChannelMusicQueueItem("", "cs2", "", { fetchImpl }),
+    /队列项无效/
   );
 });
 

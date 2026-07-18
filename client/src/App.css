@@ -2153,11 +2153,22 @@ input {
 .music-enqueue-button:hover:not(:disabled) { background: #134e4a; }
 .music-track-cover-dim { opacity: .5; }
 .music-queue-section { display: grid; gap: 10px; min-width: 0; box-sizing: border-box; }
+.music-queue-toolbar { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.music-queue-toolbar > span { min-width: 0; display: grid; gap: 2px; color: #cbd5e1; font-size: 12px; }
+.music-queue-toolbar small { color: #64748b; font-size: 10px; font-weight: 400; }
+.music-queue-shuffle-button { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid rgba(45, 212, 191, .35); border-radius: 9px; color: #ccfbf1; background: rgba(19, 78, 74, .5); font-size: 11px; }
+.music-queue-shuffle-button:hover:not(:disabled) { border-color: rgba(45, 212, 191, .7); background: #134e4a; }
+.music-queue-shuffle-button svg { width: 14px; }
 .music-queue-list { min-width: 0; margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .music-queue-item { min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid rgba(148, 163, 184, .1); border-radius: 10px; background: rgba(15, 23, 42, .45); }
 .music-queue-item-mine { border-color: rgba(45, 212, 191, .35); }
 .music-queue-position { min-width: 22px; color: #2dd4bf; font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; flex-shrink: 0; }
 .music-queue-requester { color: #64748b; font-size: 11px; }
+.music-queue-priority-tag { width: max-content; padding: 1px 6px; border: 1px solid rgba(251, 191, 36, .35); border-radius: 999px; color: #fcd34d; background: rgba(120, 53, 15, .25); font-size: 10px; }
+.music-queue-item-actions { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; }
+.music-queue-prioritize-button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid rgba(45, 212, 191, .22); border-radius: 8px; color: #5eead4; background: transparent; }
+.music-queue-prioritize-button:hover:not(:disabled) { border-color: rgba(45, 212, 191, .65); background: rgba(19, 78, 74, .4); }
+.music-queue-prioritize-button svg { width: 14px; }
 .music-queue-cancel-button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 8px; color: #94a3b8; background: transparent; flex-shrink: 0; }
 .music-queue-cancel-button:hover:not(:disabled) { color: #fecaca; border-color: rgba(248, 113, 113, .5); }
 .music-queue-cancel-button svg { width: 14px; }

@@ -155,6 +155,8 @@ test("不在频道的用户被拒绝（403 MUSIC_NOT_IN_CHANNEL）", async () =>
     ["POST", "/api/music/netease/channels/cs2/queue/playlists", { playlistId: "500" }],
     ["POST", "/api/music/netease/channels/cs2/playback/pause", { paused: true }],
     ["POST", "/api/music/netease/channels/cs2/playback/skip"],
+    ["POST", "/api/music/netease/channels/cs2/queue/shuffle"],
+    ["POST", "/api/music/netease/channels/cs2/queue/1/prioritize"],
     ["DELETE", "/api/music/netease/channels/cs2/queue/1"],
   ]) {
     const result = await api(method, path, body);
@@ -372,6 +374,49 @@ test("播放控制：当前频道 Admin/Member 可用，Guest 被拒绝", async 
   );
   assert.equal(adminView.status, 200);
   assert.equal(adminView.json.controls.canControlPlayback, true);
+});
+
+test("随机与置顶：Admin/Member 可用、Guest 被拒，响应不泄露内部排序", async () => {
+  setUser("user-a", { role: "member", displayName: "普通成员" });
+  membership.set("user-a", "cs2");
+  let view = await api("GET", "/api/music/netease/channels/cs2/queue");
+  assert.ok(view.json.items.length >= 2);
+  const targetId = view.json.items.at(-1).id;
+
+  const shuffled = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/queue/shuffle"
+  );
+  assert.equal(shuffled.status, 200);
+  assert.equal(shuffled.json.success, true);
+  assert.ok(Number.isInteger(shuffled.json.shuffledCount));
+
+  const prioritized = await api(
+    "POST",
+    `/api/music/netease/channels/cs2/queue/${targetId}/prioritize`
+  );
+  assert.equal(prioritized.status, 200);
+  view = await api("GET", "/api/music/netease/channels/cs2/queue");
+  assert.equal(view.json.items[0].id, targetId);
+  assert.equal(view.json.items[0].prioritized, true);
+  assert.ok(!view.text.includes("priority_order"));
+  assert.ok(!view.text.includes("queue_order"));
+  assert.ok(!view.text.includes("last_served_bucket_order"));
+
+  setUser("guest:queue-controls", {
+    role: "guest",
+    displayName: "访客",
+    isGuest: true,
+  });
+  membership.set("guest:queue-controls", "cs2");
+  for (const path of [
+    "/api/music/netease/channels/cs2/queue/shuffle",
+    `/api/music/netease/channels/cs2/queue/${targetId}/prioritize`,
+  ]) {
+    const denied = await api("POST", path);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.json.code, "MUSIC_PLAYBACK_FORBIDDEN");
+  }
 });
 
 test("取消权限：他人拒绝、admin 允许、本人允许", async () => {

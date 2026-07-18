@@ -8,7 +8,7 @@
 //   记录上一次消费到的桶；
 // - 选下一首时：在仍有 pending 的活跃桶中，取 bucket_order 大于游标的
 //   最小者；不存在则回绕到最小 bucket_order；
-// - 桶内部严格 FIFO（按队列项 id 递增）。
+// - 桶内部按持久化 queueOrder 排序；未提供时兼容旧数据回退到 id。
 //
 // 这保证 A 连续加 50 首、B 随后加 2 首时的顺序是
 // A1 → B1 → A2 → B2 → A3 → A4 → ... → A50。
@@ -18,7 +18,7 @@
  *
  * @param {object} input
  * @param {Array<{principalKey: string, bucketOrder: number}>} input.buckets
- * @param {Array<{id: number|string, principalKey: string}>} input.pendingItems
+ * @param {Array<{id: number|string, principalKey: string, queueOrder?: number}>} input.pendingItems
  * @param {number} input.lastServedBucketOrder
  * @returns {Array} pendingItems 中的原对象，按预计播放顺序排列（新数组）
  */
@@ -38,10 +38,16 @@ export function projectFairQueue({
     }
   }
 
-  // 桶内 FIFO：按队列项 id（自增主键）升序；输入乱序也得到确定结果
-  const sortedItems = [...pendingItems].sort(
-    (a, b) => Number(a?.id) - Number(b?.id)
-  );
+  // 桶内顺序可由服务端持久化洗牌；id 作为兼容回退和稳定 tie-breaker。
+  const sortedItems = [...pendingItems].sort((a, b) => {
+    const aOrder = Number.isFinite(Number(a?.queueOrder))
+      ? Number(a.queueOrder)
+      : Number(a?.id);
+    const bOrder = Number.isFinite(Number(b?.queueOrder))
+      ? Number(b.queueOrder)
+      : Number(b?.id);
+    return aOrder - bOrder || Number(a?.id) - Number(b?.id);
+  });
 
   const queuesByOrder = new Map();
   for (const item of sortedItems) {

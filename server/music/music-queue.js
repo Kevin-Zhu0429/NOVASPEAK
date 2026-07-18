@@ -8,6 +8,7 @@
 // 所有写操作都在 better-sqlite3 事务中执行（嵌套调用自动降级为 savepoint）。
 
 import { projectFairQueue } from "./music-queue-scheduler.js";
+import { randomInt } from "node:crypto";
 
 export const USER_QUEUE_LIMIT = 50;
 export const CHANNEL_QUEUE_LIMIT = 500;
@@ -21,6 +22,7 @@ export const MUSIC_QUEUE_ERROR = Object.freeze({
   FORBIDDEN: "MUSIC_QUEUE_FORBIDDEN",
   NOT_IN_CHANNEL: "MUSIC_NOT_IN_CHANNEL",
   CHANNEL_NOT_FOUND: "MUSIC_CHANNEL_NOT_FOUND",
+  EMPTY: "MUSIC_QUEUE_EMPTY",
 });
 
 export class MusicQueueError extends Error {
@@ -118,9 +120,45 @@ function listBuckets(db, channelId) {
 function listPendingRows(db, channelId) {
   return db
     .prepare(
-      "SELECT * FROM music_queue_items WHERE channel_id = ? AND status = 'pending' ORDER BY id"
+      `SELECT * FROM music_queue_items
+       WHERE channel_id = ? AND status = 'pending'
+       ORDER BY priority_order DESC, queue_order, id`
     )
     .all(channelId);
+}
+
+function projectPendingRows(db, channelId, state = getQueueState(db, channelId)) {
+  const rows = listPendingRows(db, channelId);
+  const prioritized = rows
+    .filter((row) => Number(row.priority_order) > 0)
+    .sort(
+      (a, b) =>
+        Number(b.priority_order) - Number(a.priority_order) || a.id - b.id
+    );
+  const normal = rows.filter((row) => Number(row.priority_order) <= 0);
+  const fair = projectFairQueue({
+    buckets: listBuckets(db, channelId),
+    pendingItems: normal.map((row) => ({
+      id: row.id,
+      principalKey: row.principal_key,
+      queueOrder: row.queue_order,
+      row,
+    })),
+    lastServedBucketOrder: state.last_served_bucket_order,
+  });
+  return {
+    rows,
+    ordered: [
+      ...prioritized.map((row) => ({
+        id: row.id,
+        principalKey: row.principal_key,
+        queueOrder: row.queue_order,
+        row,
+        prioritized: true,
+      })),
+      ...fair,
+    ],
+  };
 }
 
 /**
@@ -183,6 +221,14 @@ export function enqueueTracks(
 
     const toAdd = tracks.slice(0, capacity.remaining);
     getOrCreateBucket(db, channelId, principalKey, now);
+    let nextQueueOrder =
+      db
+        .prepare(
+          `SELECT COALESCE(MAX(queue_order), 0) + 1 AS next
+           FROM music_queue_items
+           WHERE channel_id = ? AND principal_key = ?`
+        )
+        .get(channelId, principalKey).next;
 
     const insert = db.prepare(`
       INSERT INTO music_queue_items (
@@ -190,13 +236,13 @@ export function enqueueTracks(
         song_id, song_name, artists_json,
         album_id, album_name, cover_url,
         duration_ms, fee, playlist_id, playlist_track_index,
-        status, added_at
+        status, added_at, queue_order, priority_order
       ) VALUES (
         @channelId, @principalKey, @requesterDisplayName,
         @songId, @songName, @artistsJson,
         @albumId, @albumName, @coverUrl,
         @durationMs, @fee, @playlistId, @playlistTrackIndex,
-        'pending', @addedAt
+        'pending', @addedAt, @queueOrder, 0
       )
     `);
 
@@ -223,6 +269,7 @@ export function enqueueTracks(
             ? track.trackIndex
             : null,
         addedAt: now,
+        queueOrder: nextQueueOrder++,
       });
       queueItemIds.push(String(result.lastInsertRowid));
     }
@@ -273,6 +320,7 @@ function toPublicQueueItem(row, viewer, projectedPosition) {
     addedAt: row.added_at,
     canCancel:
       row.status === "pending" && (isCurrentUser || viewer.isAdmin === true),
+    prioritized: Number(row.priority_order) > 0,
   };
 }
 
@@ -302,18 +350,11 @@ function toPublicNowPlaying(row, viewer, now) {
 export function getQueueSnapshot(db, { channelId, viewer, now = Date.now() }) {
   const channel = ensureChannel(db, channelId);
   const state = getQueueState(db, channelId);
-  const pendingRows = listPendingRows(db, channelId);
-  const buckets = listBuckets(db, channelId);
-
-  const ordered = projectFairQueue({
-    buckets,
-    pendingItems: pendingRows.map((row) => ({
-      id: row.id,
-      principalKey: row.principal_key,
-      row,
-    })),
-    lastServedBucketOrder: state.last_served_bucket_order,
-  });
+  const { rows: pendingRows, ordered } = projectPendingRows(
+    db,
+    channelId,
+    state
+  );
 
   const playingRow = db
     .prepare(
@@ -332,6 +373,106 @@ export function getQueueSnapshot(db, { channelId, viewer, now = Date.now() }) {
     totalPending: pendingRows.length,
     revision: state.revision,
   };
+}
+
+/**
+ * 随机打乱每个用户桶内部的普通 pending 歌曲。
+ * 用户桶本身与公平游标均不改变，因此 A/B 仍严格动态交替；显式置顶歌曲
+ * 保持在队首，不会被一次随机操作取消其优先语义。
+ */
+export function shufflePendingQueue(
+  db,
+  { channelId, randomIndex = (maxExclusive) => randomInt(maxExclusive), now = Date.now() }
+) {
+  return db.transaction(() => {
+    ensureChannel(db, channelId);
+    const rows = db
+      .prepare(
+        `SELECT id, principal_key, queue_order
+         FROM music_queue_items
+         WHERE channel_id = ? AND status = 'pending' AND priority_order = 0
+         ORDER BY principal_key, queue_order, id`
+      )
+      .all(channelId);
+    if (rows.length === 0) {
+      throw new MusicQueueError(
+        MUSIC_QUEUE_ERROR.EMPTY,
+        "当前没有可随机排序的待播放歌曲",
+        409
+      );
+    }
+
+    const byPrincipal = new Map();
+    for (const row of rows) {
+      if (!byPrincipal.has(row.principal_key)) {
+        byPrincipal.set(row.principal_key, []);
+      }
+      byPrincipal.get(row.principal_key).push(row);
+    }
+
+    const update = db.prepare(
+      "UPDATE music_queue_items SET queue_order = ? WHERE id = ? AND status = 'pending'"
+    );
+    let shuffledCount = 0;
+    for (const bucketRows of byPrincipal.values()) {
+      if (bucketRows.length < 2) continue;
+      const orderSlots = bucketRows.map((row) => row.queue_order);
+      const shuffled = [...bucketRows];
+      for (let index = shuffled.length - 1; index > 0; index -= 1) {
+        const picked = Number(randomIndex(index + 1));
+        const safePicked = Number.isInteger(picked) && picked >= 0 && picked <= index
+          ? picked
+          : 0;
+        [shuffled[index], shuffled[safePicked]] = [
+          shuffled[safePicked],
+          shuffled[index],
+        ];
+      }
+      shuffled.forEach((row, index) => update.run(orderSlots[index], row.id));
+      shuffledCount += shuffled.length;
+    }
+
+    return {
+      shuffledCount,
+      revision: bumpRevision(db, channelId, now),
+    };
+  })();
+}
+
+/**
+ * 把指定 pending 歌曲置为全频道下一首。后置顶者优先；claim 该歌曲时不
+ * 推进公平游标，播放结束后从置顶前的用户轮询位置继续。
+ */
+export function prioritizeQueueItem(
+  db,
+  { channelId, queueItemId, now = Date.now() }
+) {
+  return db.transaction(() => {
+    ensureChannel(db, channelId);
+    const row = db
+      .prepare(
+        "SELECT id, status FROM music_queue_items WHERE channel_id = ? AND id = ?"
+      )
+      .get(channelId, queueItemId);
+    if (!row || row.status !== "pending") {
+      throw new MusicQueueError(
+        MUSIC_QUEUE_ERROR.ITEM_NOT_FOUND,
+        "该歌曲已不在待播放队列中",
+        404
+      );
+    }
+    const nextPriority = db
+      .prepare(
+        `SELECT COALESCE(MAX(priority_order), 0) + 1 AS next
+         FROM music_queue_items WHERE channel_id = ?`
+      )
+      .get(channelId).next;
+    db.prepare(
+      `UPDATE music_queue_items SET priority_order = ?
+       WHERE channel_id = ? AND id = ? AND status = 'pending'`
+    ).run(nextPriority, channelId, queueItemId);
+    return { revision: bumpRevision(db, channelId, now) };
+  })();
 }
 
 /**
@@ -465,15 +606,7 @@ export function claimNextQueueItem(db, { channelId, now = Date.now() }) {
     if (playing) return null;
 
     const state = getQueueState(db, channelId);
-    const ordered = projectFairQueue({
-      buckets: listBuckets(db, channelId),
-      pendingItems: listPendingRows(db, channelId).map((row) => ({
-        id: row.id,
-        principalKey: row.principal_key,
-        row,
-      })),
-      lastServedBucketOrder: state.last_served_bucket_order,
-    });
+    const { ordered } = projectPendingRows(db, channelId, state);
     if (ordered.length === 0) return null;
 
     const next = ordered[0].row;
@@ -490,14 +623,20 @@ export function claimNextQueueItem(db, { channelId, now = Date.now() }) {
       )
       .get(channelId, next.principal_key)?.bucket_order;
 
-    db.prepare(`
-      INSERT INTO music_queue_state (channel_id, last_served_bucket_order, revision, updated_at)
-      VALUES (?, ?, 1, ?)
-      ON CONFLICT(channel_id) DO UPDATE SET
-        last_served_bucket_order = excluded.last_served_bucket_order,
-        revision = revision + 1,
-        updated_at = excluded.updated_at
-    `).run(channelId, bucketOrder ?? 0, now);
+    const isPriorityClaim = Number(next.priority_order) > 0;
+    if (isPriorityClaim) {
+      // 置顶是一次临时抢占，不消费用户桶轮次。
+      bumpRevision(db, channelId, now);
+    } else {
+      db.prepare(`
+        INSERT INTO music_queue_state (channel_id, last_served_bucket_order, revision, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          last_served_bucket_order = excluded.last_served_bucket_order,
+          revision = revision + 1,
+          updated_at = excluded.updated_at
+      `).run(channelId, bucketOrder ?? 0, now);
+    }
 
     return {
       queueItem: db
@@ -505,6 +644,7 @@ export function claimNextQueueItem(db, { channelId, now = Date.now() }) {
         .get(next.id),
       previousLastServedBucketOrder: state.last_served_bucket_order,
       servedBucketOrder: bucketOrder ?? 0,
+      priorityClaim: isPriorityClaim,
     };
   })();
 }
