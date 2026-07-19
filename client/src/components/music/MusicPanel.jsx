@@ -8,6 +8,7 @@ import {
 import PlaylistList from "./PlaylistList";
 import PlaylistTracks from "./PlaylistTracks";
 import MusicQueue from "./MusicQueue";
+import MusicSearch from "./MusicSearch";
 
 // 网易云音乐面板（5A：账号绑定 + 歌单浏览 + 频道队列）。
 // Cookie 只在 loginNetease() 返回值 → bindNeteaseSession() 请求体之间
@@ -146,6 +147,15 @@ export default function MusicPanel({ apiBase, channelId, onClose }) {
         <button
           type="button"
           role="tab"
+          aria-selected={activeTab === "search"}
+          className={activeTab === "search" ? "music-tab music-tab-active" : "music-tab"}
+          onClick={() => setActiveTab("search")}
+        >
+          搜索
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={activeTab === "queue"}
           className={activeTab === "queue" ? "music-tab music-tab-active" : "music-tab"}
           onClick={() => setActiveTab("queue")}
@@ -209,6 +219,13 @@ export default function MusicPanel({ apiBase, channelId, onClose }) {
                   {busy ? "等待登录……" : "重新登录网易云"}
                 </button>
               </div>
+            ) : activeTab === "search" ? (
+              <MusicSearch
+                key={`search-${libraryRevision}`}
+                apiBase={apiBase}
+                channelId={channelId}
+                onSessionInvalid={handleSessionInvalid}
+              />
             ) : activePlaylist ? (
               <PlaylistTracks
                 key={`${libraryRevision}-${activePlaylist.id}`}

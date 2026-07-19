@@ -54,7 +54,7 @@ function makePlaylist(id, { subscribed = false, creatorId = "111", trackCount = 
 }
 
 function createMockClient(overrides = {}) {
-  const calls = { playlists: [], tracks: [] };
+  const calls = { playlists: [], tracks: [], search: [], details: [] };
   const client = {
     calls,
     async listUserPlaylists(params) {
@@ -83,6 +83,36 @@ function createMockClient(overrides = {}) {
           privileges: [{ id: 987654, st: 0, pl: 320000 }],
         }
       );
+    },
+    async searchTracks(params) {
+      calls.search.push(params);
+      if (overrides.searchError) throw overrides.searchError;
+      return overrides.searchResult || {
+        songs: [{
+          id: 7654321,
+          name: "搜索歌曲",
+          ar: [{ id: 1, name: "搜索歌手" }],
+          al: { id: 2, name: "搜索专辑", picUrl: "https://p1.music.126.net/search.jpg" },
+          dt: 180000,
+          fee: 0,
+        }],
+        privileges: [{ id: 7654321, st: 0, pl: 320000 }],
+        total: 1,
+      };
+    },
+    async getSongDetail(params) {
+      calls.details.push(params);
+      return overrides.detailResult || {
+        song: {
+          id: Number(params.songId),
+          name: "详情歌曲",
+          ar: [{ id: 1, name: "详情歌手" }],
+          al: { id: 2, name: "详情专辑", picUrl: "https://p1.music.126.net/detail.jpg" },
+          dt: 190000,
+          fee: 0,
+        },
+        privileges: [{ id: Number(params.songId), st: 0, pl: 320000 }],
+      };
     },
     async verifySession() {
       throw new Error("本测试不应调用 verifySession");
@@ -176,6 +206,35 @@ test("A/B 用户 Cookie 与 uid 完全隔离", async () => {
     assert.equal(mock.calls.playlists[0].neteaseUserId, "111");
     assert.equal(mock.calls.playlists[1].cookie, COOKIE_B);
     assert.equal(mock.calls.playlists[1].neteaseUserId, "222");
+  });
+});
+
+test("搜索接口使用当前用户 Cookie、标准化响应且不泄露凭据", async () => {
+  const mock = createMockClient();
+  await withApp(mock, async (api) => {
+    const result = await api(
+      "/api/music/netease/search/tracks?keywords=%E6%B5%8B%E8%AF%95&limit=30&offset=0"
+    );
+    assert.equal(result.status, 200);
+    assert.equal(mock.calls.search.length, 1);
+    assert.equal(mock.calls.search[0].cookie, COOKIE_A);
+    assert.equal(mock.calls.search[0].keywords, "测试");
+    assert.deepEqual(result.json.tracks[0], {
+      id: "7654321",
+      name: "搜索歌曲",
+      artists: [{ id: "1", name: "搜索歌手" }],
+      album: {
+        id: "2",
+        name: "搜索专辑",
+        picUrl: "https://p1.music.126.net/search.jpg",
+      },
+      durationMs: 180000,
+      fee: 0,
+      playable: true,
+      unavailableReason: null,
+    });
+    assert.equal(result.text.includes("MUSIC_U"), false);
+    assert.equal(result.text.includes("fake-cookie"), false);
   });
 });
 
@@ -529,4 +588,43 @@ test("netease-client：上游 reject 与异常结构映射为稳定错误", asyn
     () => rejecting.listUserPlaylists({ neteaseUserId: "111", cookie: "" }),
     (error) => error.code === NETEASE_ERROR.SESSION_INVALID
   );
+});
+
+test("netease-client：cloudsearch 与 song_detail 参数和结果被正确封装", async () => {
+  const calls = [];
+  const client = createNeteaseClient({
+    api: {
+      cloudsearch: async (params) => {
+        calls.push(["cloudsearch", params]);
+        return {
+          status: 200,
+          body: {
+            code: 200,
+            result: { songs: [{ id: 12 }], privileges: [{ id: 12 }], songCount: 9 },
+          },
+        };
+      },
+      song_detail: async (params) => {
+        calls.push(["song_detail", params]);
+        return {
+          status: 200,
+          body: { code: 200, songs: [{ id: 12 }], privileges: [{ id: 12 }] },
+        };
+      },
+    },
+  });
+  const search = await client.searchTracks({
+    keywords: "歌曲",
+    cookie: "MUSIC_U=fake",
+    limit: 30,
+    offset: 60,
+  });
+  assert.equal(search.total, 9);
+  assert.deepEqual(calls[0], [
+    "cloudsearch",
+    { keywords: "歌曲", type: 1, limit: 30, offset: 60, cookie: "MUSIC_U=fake" },
+  ]);
+  const detail = await client.getSongDetail({ songId: "12", cookie: "MUSIC_U=fake" });
+  assert.equal(detail.song.id, 12);
+  assert.deepEqual(calls[1], ["song_detail", { ids: "12", cookie: "MUSIC_U=fake" }]);
 });

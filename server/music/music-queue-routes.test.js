@@ -60,7 +60,7 @@ const PRIVILEGES = SONGS.map((song, index) => ({
 }));
 
 const mockClient = {
-  calls: { playlists: [], tracks: [] },
+  calls: { playlists: [], tracks: [], details: [] },
   async listUserPlaylists(params) {
     mockClient.calls.playlists.push(params);
     if (params.neteaseUserId === "111") {
@@ -75,6 +75,20 @@ const mockClient = {
     return {
       songs: SONGS.slice(offset, offset + limit),
       privileges: PRIVILEGES.slice(offset, offset + limit),
+    };
+  },
+  async getSongDetail(params) {
+    mockClient.calls.details.push(params);
+    return {
+      song: {
+        id: Number(params.songId),
+        name: "搜索详情真实歌名",
+        ar: [{ id: 8, name: "搜索详情真实歌手" }],
+        al: { id: 9, name: "搜索详情真实专辑", picUrl: "https://p1.music.126.net/search-detail.jpg" },
+        dt: 210000,
+        fee: 0,
+      },
+      privileges: [{ id: Number(params.songId), st: 0, pl: 320000 }],
     };
   },
   async verifySession() {
@@ -157,6 +171,9 @@ test("不在频道的用户被拒绝（403 MUSIC_NOT_IN_CHANNEL）", async () =>
     ["POST", "/api/music/netease/channels/cs2/playback/skip"],
     ["POST", "/api/music/netease/channels/cs2/queue/shuffle"],
     ["POST", "/api/music/netease/channels/cs2/queue/1/prioritize"],
+    ["POST", "/api/music/netease/channels/cs2/queue/search-tracks", { songId: "9000" }],
+    ["DELETE", "/api/music/netease/channels/cs2/queue/mine"],
+    ["DELETE", "/api/music/netease/channels/cs2/queue"],
     ["DELETE", "/api/music/netease/channels/cs2/queue/1"],
   ]) {
     const result = await api(method, path, body);
@@ -540,4 +557,56 @@ test("用户上限：整歌单添加最多补足剩余容量并标记 truncated"
   );
   assert.equal(overflow.status, 409);
   assert.equal(overflow.json.code, "MUSIC_USER_QUEUE_LIMIT");
+});
+
+test("搜索点歌服务端重新查询详情，且用户可删除自己的全部待播歌曲", async () => {
+  seedBinding("user-search", "444");
+  setUser("user-search", { displayName: "搜索用户" });
+  membership.set("user-search", "cs2");
+  const result = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/queue/search-tracks",
+    { songId: "812345" }
+  );
+  assert.equal(result.status, 200);
+  assert.equal(mockClient.calls.details.at(-1).songId, "812345");
+  const stored = db
+    .prepare("SELECT song_name, requester_display_name FROM music_queue_items WHERE id = ?")
+    .get(Number(result.json.queueItemId));
+  assert.deepEqual(stored, {
+    song_name: "搜索详情真实歌名",
+    requester_display_name: "搜索用户",
+  });
+
+  const removed = await api(
+    "DELETE",
+    "/api/music/netease/channels/cs2/queue/mine"
+  );
+  assert.equal(removed.status, 200);
+  assert.ok(removed.json.cancelledCount >= 1);
+  assert.equal(
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM music_queue_items WHERE channel_id = 'cs2' AND principal_key = 'user-search' AND status = 'pending'"
+    ).get().count,
+    0
+  );
+});
+
+test("只有管理员可以清空频道待播队列", async () => {
+  setUser("user-b", { role: "member", displayName: "乙" });
+  membership.set("user-b", "cs2");
+  const denied = await api("DELETE", "/api/music/netease/channels/cs2/queue");
+  assert.equal(denied.status, 403);
+  assert.equal(denied.json.code, "MUSIC_QUEUE_FORBIDDEN");
+
+  setUser("user-b", { role: "admin", displayName: "管理员" });
+  const cleared = await api("DELETE", "/api/music/netease/channels/cs2/queue");
+  assert.equal(cleared.status, 200);
+  assert.ok(cleared.json.cancelledCount >= 1);
+  assert.equal(
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM music_queue_items WHERE channel_id = 'cs2' AND status = 'pending'"
+    ).get().count,
+    0
+  );
 });

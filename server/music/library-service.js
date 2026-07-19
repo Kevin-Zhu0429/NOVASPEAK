@@ -104,6 +104,65 @@ export async function listUserPlaylistsPage({
   };
 }
 
+export async function searchTracksPage({
+  db,
+  principalKey,
+  neteaseClient,
+  keywords,
+  limit,
+  offset,
+  env = process.env,
+}) {
+  const { cookie } = loadNeteaseCredential(db, principalKey, env);
+  const { songs, privileges, total } = await neteaseClient.searchTracks({
+    keywords,
+    cookie,
+    limit,
+    offset,
+  });
+  const privilegeMap = buildPrivilegeMap(privileges);
+  const tracks = songs
+    .map((song) =>
+      normalizeTrack(
+        song,
+        privilegeMap.get(toIdString(song?.id)) || song?.privilege
+      )
+    )
+    .filter(Boolean);
+  return {
+    tracks,
+    pagination: {
+      limit,
+      offset,
+      more: typeof total === "number" ? offset + tracks.length < total : tracks.length === limit,
+      total,
+    },
+  };
+}
+
+export async function getVerifiedSearchTrack({
+  db,
+  principalKey,
+  neteaseClient,
+  songId,
+  env = process.env,
+}) {
+  const { cookie } = loadNeteaseCredential(db, principalKey, env);
+  const { song, privileges } = await neteaseClient.getSongDetail({ songId, cookie });
+  const privilegeMap = buildPrivilegeMap(privileges);
+  const track = song
+    ? normalizeTrack(song, privilegeMap.get(toIdString(song.id)) || song.privilege)
+    : null;
+  if (!track || track.id !== songId) {
+    throw new MusicLibraryError(
+      MUSIC_LIBRARY_ERROR.TRACK_NOT_FOUND,
+      "未找到该歌曲，请重新搜索",
+      404
+    );
+  }
+  return { track };
+}
+
 /**
  * 有界分页扫描当前账号可见歌单（自建 + 收藏），
  * 确认 playlistId 属于当前账号；不属于时返回 null。

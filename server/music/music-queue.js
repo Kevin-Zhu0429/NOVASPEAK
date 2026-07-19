@@ -562,6 +562,49 @@ export function cancelPendingItemsForPrincipal(db, principalKey, now = Date.now(
 }
 
 /**
+ * 取消当前用户在指定频道内的全部 pending 项目。正在播放的歌曲不受影响。
+ */
+export function cancelPendingItemsForPrincipalInChannel(
+  db,
+  { channelId, principalKey, now = Date.now() }
+) {
+  return db.transaction(() => {
+    ensureChannel(db, channelId);
+    const cancelledCount = db
+      .prepare(
+        `UPDATE music_queue_items
+         SET status = 'cancelled', finished_at = ?
+         WHERE channel_id = ? AND principal_key = ? AND status = 'pending'`
+      )
+      .run(now, channelId, principalKey).changes;
+    const revision = cancelledCount > 0
+      ? bumpRevision(db, channelId, now)
+      : getQueueState(db, channelId).revision;
+    return { cancelledCount, revision };
+  })();
+}
+
+/**
+ * 管理员清空指定频道的全部 pending 项目。当前 playing 项继续播放。
+ */
+export function clearPendingQueue(db, { channelId, now = Date.now() }) {
+  return db.transaction(() => {
+    ensureChannel(db, channelId);
+    const cancelledCount = db
+      .prepare(
+        `UPDATE music_queue_items
+         SET status = 'cancelled', finished_at = ?
+         WHERE channel_id = ? AND status = 'pending'`
+      )
+      .run(now, channelId).changes;
+    const revision = cancelledCount > 0
+      ? bumpRevision(db, channelId, now)
+      : getQueueState(db, channelId).revision;
+    return { cancelledCount, revision };
+  })();
+}
+
+/**
  * 是否存在待播放歌曲（manager 决定是否需要探测解码器 / claim）。
  */
 export function hasPendingItems(db, channelId) {

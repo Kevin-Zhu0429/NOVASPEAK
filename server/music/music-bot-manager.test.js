@@ -749,3 +749,90 @@ test("FFmpeg 配置错误：播放中歌曲恢复 pending、公平游标恢复�
   assert.ok(dump.includes("FFMPEG_PATH_INVALID") || dump.includes("FFMPEG_NOT_AVAILABLE"));
   db.close();
 });
+
+test("频道持续无人两分钟后暂停并把当前歌曲放回原公平位置", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  const songName = `歌-user-a-${songSeq - 1}`;
+  let usersPresent = true;
+  let clock = 0;
+  let resolveStarted;
+  const started = new Promise((resolve) => { resolveStarted = resolve; });
+  const { deps } = makeDeps({
+    hasUsers: () => usersPresent,
+    decodeToFrames: async ({ onFrame, signal }) => {
+      await onFrame(new Int16Array(960));
+      resolveStarted();
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      const error = new Error("idle abort");
+      error.code = "FFMPEG_ABORTED";
+      throw error;
+    },
+  });
+  const manager = createMusicBotManager({
+    db,
+    ...deps,
+    idlePauseMs: 120_000,
+    now: () => clock,
+  });
+  manager.kick("cs2");
+  await started;
+  assert.equal(statusOf(db, songName), "playing");
+
+  usersPresent = false;
+  manager.scan();
+  clock = 119_999;
+  manager.scan();
+  assert.equal(statusOf(db, songName), "playing");
+
+  clock = 120_000;
+  manager.scan();
+  await drain(manager);
+  assert.equal(statusOf(db, songName), "pending");
+  assert.equal(manager.activeChannelCount, 0);
+  db.close();
+});
+
+test("成员在空置期限内返回会取消暂停倒计时", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  const songName = `歌-user-a-${songSeq - 1}`;
+  let usersPresent = true;
+  let clock = 0;
+  let resolveStarted;
+  const started = new Promise((resolve) => { resolveStarted = resolve; });
+  const { deps } = makeDeps({
+    hasUsers: () => usersPresent,
+    decodeToFrames: async ({ onFrame, signal }) => {
+      await onFrame(new Int16Array(960));
+      resolveStarted();
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      const error = new Error("stopped");
+      error.code = "FFMPEG_ABORTED";
+      throw error;
+    },
+  });
+  const manager = createMusicBotManager({
+    db,
+    ...deps,
+    idlePauseMs: 120_000,
+    now: () => clock,
+  });
+  manager.kick("cs2");
+  await started;
+
+  usersPresent = false;
+  manager.scan();
+  clock = 100_000;
+  usersPresent = true;
+  manager.scan();
+  usersPresent = false;
+  manager.scan();
+  clock = 130_000;
+  manager.scan();
+  assert.equal(statusOf(db, songName), "playing");
+
+  await manager.stop();
+  assert.equal(statusOf(db, songName), "pending");
+  db.close();
+});

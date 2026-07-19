@@ -263,6 +263,46 @@ export function createNeteaseClient({
       };
     },
 
+    async searchTracks({ keywords, cookie, limit = 30, offset = 0 }) {
+      requireCookie(cookie);
+      if (typeof keywords !== "string" || !keywords.trim() || keywords.trim().length > 80) {
+        throw new NeteaseError(NETEASE_ERROR.REQUEST_FAILED, "搜索关键词无效");
+      }
+      const response = await callApi("cloudsearch", {
+        keywords: keywords.trim(),
+        type: 1,
+        limit,
+        offset,
+        cookie,
+      });
+      const body = response?.body;
+      const result = body?.result;
+      if (!body || body.code !== 200 || !result || !Array.isArray(result.songs)) {
+        throw new NeteaseError(NETEASE_ERROR.REQUEST_FAILED, "网易云返回了无效的搜索数据");
+      }
+      return {
+        songs: result.songs,
+        privileges: Array.isArray(result.privileges) ? result.privileges : [],
+        total: Number.isFinite(Number(result.songCount)) ? Math.max(0, Number(result.songCount)) : null,
+      };
+    },
+
+    async getSongDetail({ songId, cookie }) {
+      requireCookie(cookie);
+      if (typeof songId !== "string" || !/^\d{1,20}$/.test(songId)) {
+        throw new NeteaseError(NETEASE_ERROR.REQUEST_FAILED, "歌曲编号无效");
+      }
+      const response = await callApi("song_detail", { ids: songId, cookie });
+      const body = response?.body;
+      if (!body || body.code !== 200 || !Array.isArray(body.songs)) {
+        throw new NeteaseError(NETEASE_ERROR.REQUEST_FAILED, "网易云返回了无效的歌曲数据");
+      }
+      return {
+        song: body.songs.find((item) => String(item?.id) === songId) || null,
+        privileges: Array.isArray(body.privileges) ? body.privileges : [],
+      };
+    },
+
     /**
      * 获取单曲完整播放地址（点歌者自己的 Cookie）。
      *

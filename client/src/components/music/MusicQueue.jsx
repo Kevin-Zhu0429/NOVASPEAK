@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Music, Pin, Shuffle, X } from "lucide-react";
+import { Music, Pin, Shuffle, Trash2, X } from "lucide-react";
 import {
+  cancelOwnPendingMusicQueue,
   cancelMusicQueueItem,
+  clearChannelMusicQueue,
   getChannelMusicQueue,
   prioritizeChannelMusicQueueItem,
   shuffleChannelMusicQueue,
@@ -18,6 +20,7 @@ export default function MusicQueue({ apiBase, channelId }) {
   const [error, setError] = useState("");
   const [cancelBusyId, setCancelBusyId] = useState("");
   const [queueActionBusy, setQueueActionBusy] = useState("");
+  const [feedback, setFeedback] = useState("");
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
 
@@ -94,6 +97,44 @@ export default function MusicQueue({ apiBase, channelId }) {
     }
   };
 
+  const removeOwnPending = async () => {
+    if (queueActionBusy || !window.confirm("删除你在当前频道排队的全部歌曲？")) return;
+    setQueueActionBusy("remove-own");
+    setError("");
+    setFeedback("");
+    try {
+      const result = await cancelOwnPendingMusicQueue(apiBase, channelId);
+      if (!mountedRef.current) return;
+      setFeedback(`已删除 ${result.cancelledCount || 0} 首自己排队的歌曲`);
+      await refresh();
+    } catch (removeError) {
+      if (mountedRef.current) {
+        setError(removeError.message || "删除自己的排队歌曲失败");
+      }
+    } finally {
+      if (mountedRef.current) setQueueActionBusy("");
+    }
+  };
+
+  const clearQueue = async () => {
+    if (queueActionBusy || !window.confirm("清空当前频道的全部待播放歌曲？正在播放的歌曲会继续。")) return;
+    setQueueActionBusy("clear");
+    setError("");
+    setFeedback("");
+    try {
+      const result = await clearChannelMusicQueue(apiBase, channelId);
+      if (!mountedRef.current) return;
+      setFeedback(`已清空 ${result.cancelledCount || 0} 首待播放歌曲`);
+      await refresh();
+    } catch (clearError) {
+      if (mountedRef.current) {
+        setError(clearError.message || "清空频道队列失败");
+      }
+    } finally {
+      if (mountedRef.current) setQueueActionBusy("");
+    }
+  };
+
   const prioritizeItem = async (item) => {
     if (queueActionBusy) return;
     setQueueActionBusy(`prioritize:${item.id}`);
@@ -117,27 +158,55 @@ export default function MusicQueue({ apiBase, channelId }) {
   const items = snapshot?.items || [];
   const nowPlaying = snapshot?.nowPlaying || null;
   const canControlQueue = snapshot?.controls?.canControlPlayback === true;
+  const canClearQueue = snapshot?.controls?.canClearQueue === true;
+  const hasOwnPending = snapshot?.controls?.hasOwnPending === true;
 
   return (
     <div className="music-queue-section">
       <div className="music-queue-toolbar">
-        <span>
+        <span className="music-queue-summary">
           待播放 {items.length} 首
           <small>随机播放仍保留用户交替顺序</small>
         </span>
-        {canControlQueue && (
-          <button
-            type="button"
-            className="music-queue-shuffle-button"
-            onClick={shuffleQueue}
-            disabled={Boolean(queueActionBusy) || items.length < 2}
-            title="打乱每位用户各自歌曲的顺序，用户之间仍公平交替"
-          >
-            <Shuffle />
-            随机播放
-          </button>
-        )}
+        <span className="music-queue-toolbar-actions">
+          {hasOwnPending && (
+            <button
+              type="button"
+              className="music-queue-danger-button"
+              onClick={removeOwnPending}
+              disabled={Boolean(queueActionBusy)}
+            >
+              <Trash2 />
+              删除我的
+            </button>
+          )}
+          {canClearQueue && items.length > 0 && (
+            <button
+              type="button"
+              className="music-queue-danger-button"
+              onClick={clearQueue}
+              disabled={Boolean(queueActionBusy)}
+            >
+              <Trash2 />
+              清空队列
+            </button>
+          )}
+          {canControlQueue && (
+            <button
+              type="button"
+              className="music-queue-shuffle-button"
+              onClick={shuffleQueue}
+              disabled={Boolean(queueActionBusy) || items.length < 2}
+              title="打乱每位用户各自歌曲的顺序，用户之间仍公平交替"
+            >
+              <Shuffle />
+              随机播放
+            </button>
+          )}
+        </span>
       </div>
+
+      {feedback && <div className="music-panel-feedback">{feedback}</div>}
 
       {nowPlaying && (
         <div className="music-queue-now-playing">

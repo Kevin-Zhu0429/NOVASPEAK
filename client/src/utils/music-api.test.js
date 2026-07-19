@@ -2,14 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   bindNeteaseSession,
+  cancelOwnPendingMusicQueue,
   cancelMusicQueueItem,
+  clearChannelMusicQueue,
   enqueueNeteasePlaylist,
+  enqueueNeteaseSearchTrack,
   enqueueNeteaseTrack,
   getChannelMusicQueue,
   getNeteaseAccount,
   getNeteasePlaylists,
   getNeteasePlaylistTracks,
   prioritizeChannelMusicQueueItem,
+  searchNeteaseTracks,
   setChannelMusicPaused,
   shuffleChannelMusicQueue,
   skipChannelMusicTrack,
@@ -392,6 +396,50 @@ test("取消队列项：DELETE + 路径编码", async () => {
   await assert.rejects(
     () => cancelMusicQueueItem("", "cs2", "", { fetchImpl }),
     /队列项无效/
+  );
+});
+
+test("搜索歌曲：关键词与分页参数正确编码", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { tracks: [], pagination: { more: false } })
+  );
+  await searchNeteaseTracks("http://api.test", "周 杰伦", {
+    limit: 30,
+    offset: 60,
+    fetchImpl,
+  });
+  assert.equal(
+    calls[0].url,
+    "http://api.test/api/music/netease/search/tracks?keywords=%E5%91%A8+%E6%9D%B0%E4%BC%A6&limit=30&offset=60"
+  );
+  assert.equal(calls[0].options.method, "GET");
+  await assert.rejects(
+    () => searchNeteaseTracks("", "   ", { fetchImpl }),
+    /请输入歌曲或歌手名称/
+  );
+});
+
+test("搜索结果点歌只提交 songId", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { success: true, queueItemId: "7" })
+  );
+  await enqueueNeteaseSearchTrack("", "cs2", { songId: "123" }, { fetchImpl });
+  assert.equal(calls[0].url, "/api/music/netease/channels/cs2/queue/search-tracks");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { songId: "123" });
+});
+
+test("批量删除自己的排队歌曲与管理员清空队列使用独立 DELETE 路由", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { success: true, cancelledCount: 2, revision: 8 })
+  );
+  await cancelOwnPendingMusicQueue("", "cs2", { fetchImpl });
+  await clearChannelMusicQueue("", "cs2", { fetchImpl });
+  assert.deepEqual(
+    calls.map((call) => [call.url, call.options.method]),
+    [
+      ["/api/music/netease/channels/cs2/queue/mine", "DELETE"],
+      ["/api/music/netease/channels/cs2/queue", "DELETE"],
+    ]
   );
 });
 

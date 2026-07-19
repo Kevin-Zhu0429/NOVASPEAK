@@ -138,6 +138,29 @@ export async function getNeteasePlaylistTracks(
   );
 }
 
+/**
+ * 按关键词搜索当前已绑定网易云账号可见的歌曲。
+ */
+export async function searchNeteaseTracks(
+  apiBase,
+  keywords,
+  { limit, offset, signal, fetchImpl } = {}
+) {
+  if (typeof keywords !== "string" || !keywords.trim()) {
+    throw new Error("请输入歌曲或歌手名称");
+  }
+  const params = new URLSearchParams();
+  params.set("keywords", keywords.trim());
+  if (limit !== undefined && limit !== null) params.set("limit", String(limit));
+  if (offset !== undefined && offset !== null) params.set("offset", String(offset));
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/search/tracks?${params.toString()}`,
+    { method: "GET", signal },
+    { fetchImpl, fallbackError: "搜索网易云歌曲失败" }
+  );
+}
+
 function requireChannelId(channelId) {
   if (typeof channelId !== "string" || !channelId.trim()) {
     throw new Error("频道无效");
@@ -264,6 +287,28 @@ export async function enqueueNeteaseTrack(
 }
 
 /**
+ * 从搜索结果点歌。前端只提交歌曲 ID，服务端重新查询并验证元数据和权限。
+ */
+export async function enqueueNeteaseSearchTrack(
+  apiBase,
+  channelId,
+  { songId },
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/search-tracks`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ songId }),
+    },
+    { fetchImpl, fallbackError: "点歌失败" }
+  );
+}
+
+/**
  * 把整个歌单添加到频道队列（服务端只加入可播放歌曲）。
  */
 export async function enqueueNeteasePlaylist(
@@ -303,5 +348,35 @@ export async function cancelMusicQueueItem(
     `/api/music/netease/channels/${encoded}/queue/${encodeURIComponent(queueItemId.trim())}`,
     { method: "DELETE" },
     { fetchImpl, fallbackError: "取消歌曲失败" }
+  );
+}
+
+/** 删除当前用户在频道内的全部待播放歌曲。 */
+export async function cancelOwnPendingMusicQueue(
+  apiBase,
+  channelId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue/mine`,
+    { method: "DELETE" },
+    { fetchImpl, fallbackError: "删除自己的排队歌曲失败" }
+  );
+}
+
+/** 管理员清空频道内全部待播放歌曲。 */
+export async function clearChannelMusicQueue(
+  apiBase,
+  channelId,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/queue`,
+    { method: "DELETE" },
+    { fetchImpl, fallbackError: "清空频道队列失败" }
   );
 }

@@ -22,16 +22,20 @@ import { NETEASE_ERROR, NeteaseError } from "./netease-client.js";
 import {
   MusicLibraryError,
   getPlayableTracksForPlaylist,
+  getVerifiedSearchTrack,
   getVerifiedPlaylistTrack,
   listPlaylistTracksPage,
   listUserPlaylistsPage,
+  searchTracksPage,
 } from "./library-service.js";
 import { isValidPlaylistId, parsePageParams } from "./netease-normalizers.js";
 import {
   MUSIC_QUEUE_ERROR,
   MusicQueueError,
   cancelPendingItemsForPrincipal,
+  cancelPendingItemsForPrincipalInChannel,
   cancelQueueItem,
+  clearPendingQueue,
   enqueueTracks,
   getQueueSnapshot,
   getRemainingQueueCapacity,
@@ -263,6 +267,34 @@ export function createNeteaseMusicRouter({
     }
   });
 
+  router.get("/search/tracks", async (req, res) => {
+    const keywords = typeof req.query?.keywords === "string" ? req.query.keywords.trim() : "";
+    if (!keywords || keywords.length > 80) {
+      return res.status(400).json({ error: "请输入 1～80 个字符的搜索关键词", code: "INVALID_SEARCH_KEYWORDS" });
+    }
+    const page = parsePageParams(req.query, { defaultLimit: 30, maxLimit: 50 });
+    if (!page.ok) {
+      return res.status(400).json({ error: page.error, code: "INVALID_PAGINATION" });
+    }
+    try {
+      const result = await searchTracksPage({
+        db,
+        principalKey: req.musicPrincipal.key,
+        neteaseClient,
+        keywords,
+        limit: page.limit,
+        offset: page.offset,
+        env,
+      });
+      return res.json(result);
+    } catch (error) {
+      const handled = sendNeteaseError(res, error);
+      if (handled) return handled;
+      console.error("Netease search error:", error?.message);
+      return res.status(500).json({ error: "搜索网易云歌曲失败" });
+    }
+  });
+
   // ---------- 频道音乐队列 ----------
 
   const SONG_ID_PATTERN = /^\d{1,20}$/;
@@ -298,6 +330,10 @@ export function createNeteaseMusicRouter({
     snapshot.controls = {
       canControlPlayback:
         req.authUser.role === "admin" || req.authUser.role === "member",
+      canClearQueue: req.authUser.role === "admin",
+      hasOwnPending: snapshot.items.some(
+        (item) => item.requester.isCurrentUser === true
+      ),
     };
     return snapshot;
   }
@@ -378,6 +414,54 @@ export function createNeteaseMusicRouter({
         const handled = sendNeteaseError(res, error);
         if (handled) return handled;
         console.error("Music enqueue track error:", error?.message);
+        return res.status(500).json({ error: "点歌失败" });
+      }
+    }
+  );
+
+  router.post(
+    "/channels/:channelId/queue/search-tracks",
+    requireInChannel,
+    async (req, res) => {
+      const songId = req.body?.songId;
+      if (typeof songId !== "string" || !SONG_ID_PATTERN.test(songId)) {
+        return res.status(400).json({ error: "歌曲编号无效" });
+      }
+      try {
+        const { track } = await getVerifiedSearchTrack({
+          db,
+          principalKey: req.musicPrincipal.key,
+          neteaseClient,
+          songId,
+          env,
+        });
+        if (!track.playable) {
+          return res.status(409).json({
+            error: track.unavailableReason || "该歌曲当前不可播放",
+            code: MUSIC_QUEUE_ERROR.TRACK_UNAVAILABLE,
+          });
+        }
+        const result = enqueueTracks(db, {
+          channelId: req.params.channelId,
+          principalKey: req.musicPrincipal.key,
+          requesterDisplayName: req.authUser.displayName,
+          tracks: [track],
+        });
+        const snapshot = getPublicQueueSnapshot(req);
+        const queueItemId = result.queueItemIds[0];
+        const projected = snapshot.items.find((item) => item.id === queueItemId);
+        notifyQueueUpdated(req.params.channelId);
+        return res.json({
+          success: true,
+          addedCount: result.addedCount,
+          queueItemId,
+          projectedPosition: projected?.projectedPosition ?? null,
+          revision: result.revision,
+        });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music enqueue search track error:", error?.message);
         return res.status(500).json({ error: "点歌失败" });
       }
     }
@@ -559,6 +643,51 @@ export function createNeteaseMusicRouter({
         if (handled) return handled;
         console.error("Music queue prioritize error:", error?.message);
         return res.status(500).json({ error: "设置优先播放失败" });
+      }
+    }
+  );
+
+  // 当前用户删除自己在本频道的全部待播歌曲。
+  router.delete(
+    "/channels/:channelId/queue/mine",
+    requireInChannel,
+    (req, res) => {
+      try {
+        const result = cancelPendingItemsForPrincipalInChannel(db, {
+          channelId: req.params.channelId,
+          principalKey: req.musicPrincipal.key,
+        });
+        return res.json({ success: true, ...result });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music queue cancel mine error:", error?.message);
+        return res.status(500).json({ error: "删除自己的排队歌曲失败" });
+      }
+    }
+  );
+
+  // 仅管理员可以清空频道待播队列；当前播放歌曲继续播放。
+  router.delete(
+    "/channels/:channelId/queue",
+    requireInChannel,
+    (req, res) => {
+      if (req.authUser.role !== "admin") {
+        return res.status(403).json({
+          error: "只有管理员可以清空频道队列",
+          code: MUSIC_QUEUE_ERROR.FORBIDDEN,
+        });
+      }
+      try {
+        const result = clearPendingQueue(db, {
+          channelId: req.params.channelId,
+        });
+        return res.json({ success: true, ...result });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music queue clear error:", error?.message);
+        return res.status(500).json({ error: "清空频道队列失败" });
       }
     }
   );

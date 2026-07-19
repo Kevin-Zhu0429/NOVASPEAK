@@ -97,6 +97,7 @@ export function classifyPlaybackError(error) {
 }
 
 const DEFAULT_SCAN_INTERVAL_MS = 15_000;
+const DEFAULT_IDLE_PAUSE_MS = 120_000;
 const DEFAULT_BACKOFF_INITIAL_MS = 5_000;
 const DEFAULT_BACKOFF_MAX_MS = 60_000;
 
@@ -113,6 +114,7 @@ export function createMusicBotManager({
   decodeToFrames = decodeMediaToFrames,
   loadCredential = loadNeteaseCredential,
   scanIntervalMs = DEFAULT_SCAN_INTERVAL_MS,
+  idlePauseMs = DEFAULT_IDLE_PAUSE_MS,
   backoffInitialMs = DEFAULT_BACKOFF_INITIAL_MS,
   backoffMaxMs = DEFAULT_BACKOFF_MAX_MS,
   now = () => Date.now(),
@@ -120,6 +122,7 @@ export function createMusicBotManager({
 }) {
   const runtime = ffmpegRuntime || createFfmpegRuntime({ env });
   const workers = new Map(); // channelId -> { promise, abortController }
+  const emptySinceByChannel = new Map();
   let stopped = false;
   let scanTimer = null;
 
@@ -346,8 +349,19 @@ export function createMusicBotManager({
     try {
       for (;;) {
         if (stopped || signal.aborted) break;
-        // 无稳定听众 / 无待播放歌曲 → 机器人离开
-        if (!presenceService.hasUsersInChannel(channelId)) break;
+        // 频道暂时无人时不领取下一首；保留 pending 并等待成员返回。
+        // 正在播放的歌曲由 scan 在持续空置达到阈值后 Abort/requeue。
+        if (!presenceService.hasUsersInChannel(channelId)) {
+          const emptySince = emptySinceByChannel.get(channelId) ?? now();
+          emptySinceByChannel.set(channelId, emptySince);
+          const remaining = Math.max(0, idlePauseMs - (now() - emptySince));
+          if (remaining === 0) break;
+          if (!(await abortableDelay(Math.min(scanIntervalMs, remaining), signal))) {
+            break;
+          }
+          continue;
+        }
+        emptySinceByChannel.delete(channelId);
         if (!hasPendingItems(db, channelId)) break;
 
         // 领取之前先探测解码器：失败则不 claim、队列保持 pending、退避
@@ -455,6 +469,9 @@ export function createMusicBotManager({
     if (stopped) return;
     if (typeof channelId !== "string" || !channelId) return;
     if (workers.has(channelId)) return; // 同频道只有一个 worker
+    // 无人频道只保留队列，不创建机器人、不领取歌曲。
+    if (!presenceService.hasUsersInChannel(channelId)) return;
+    emptySinceByChannel.delete(channelId);
 
     const abortController = new AbortController();
     const sessionBox = { session: null };
@@ -471,6 +488,7 @@ export function createMusicBotManager({
       })
       .finally(() => {
         workers.delete(channelId);
+        emptySinceByChannel.delete(channelId);
       });
     workers.set(channelId, {
       promise,
@@ -511,6 +529,20 @@ export function createMusicBotManager({
   function scan() {
     if (stopped) return;
     try {
+      // 活跃频道空置达到阈值后中止当前 worker。当前 playing 项通过既有
+      // Abort 错误分类回到 pending 并恢复公平游标；队列不会被清空。
+      for (const [channelId, worker] of workers) {
+        if (presenceService.hasUsersInChannel(channelId)) {
+          emptySinceByChannel.delete(channelId);
+          continue;
+        }
+        const emptySince = emptySinceByChannel.get(channelId) ?? now();
+        emptySinceByChannel.set(channelId, emptySince);
+        if (now() - emptySince >= idlePauseMs) {
+          worker.abortController.abort();
+          log("info", "频道持续无人，音乐队列已暂停", "MUSIC_CHANNEL_IDLE");
+        }
+      }
       for (const channelId of listChannelsWithPending(db)) {
         if (presenceService.hasUsersInChannel(channelId)) kick(channelId);
       }
@@ -543,6 +575,7 @@ export function createMusicBotManager({
       worker.abortController.abort();
     }
     await Promise.allSettled(pending.map((worker) => worker.promise));
+    emptySinceByChannel.clear();
   }
 
   return {

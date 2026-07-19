@@ -10,7 +10,9 @@ import {
   MUSIC_QUEUE_ERROR,
   USER_QUEUE_LIMIT,
   cancelPendingItemsForPrincipal,
+  cancelPendingItemsForPrincipalInChannel,
   cancelQueueItem,
+  clearPendingQueue,
   claimNextQueueItem,
   enqueueTracks,
   finishQueueItem,
@@ -681,5 +683,49 @@ test("hasPendingItems / listChannelsWithPending", () => {
   enqueueMany(db, "user-a", ["P2"], "apex");
   assert.equal(hasPendingItems(db, "cs2"), true);
   assert.deepEqual(listChannelsWithPending(db).sort(), ["apex", "cs2"]);
+  db.close();
+});
+
+test("用户可删除本频道自己的全部 pending，其他用户与 playing 不受影响", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["CA1", "CA2"]);
+  enqueueMany(db, "user-b", ["CB1"]);
+  const playing = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+  assert.equal(playing.queueItem.song_name, "CA1");
+
+  const result = cancelPendingItemsForPrincipalInChannel(db, {
+    channelId: "cs2",
+    principalKey: "user-a",
+    now: 2_000,
+  });
+  assert.equal(result.cancelledCount, 1);
+  assert.deepEqual(
+    db.prepare("SELECT song_name, status FROM music_queue_items ORDER BY id").all(),
+    [
+      { song_name: "CA1", status: "playing" },
+      { song_name: "CA2", status: "cancelled" },
+      { song_name: "CB1", status: "pending" },
+    ]
+  );
+  db.close();
+});
+
+test("管理员清空频道只取消 pending，其他频道和当前 playing 保留", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["QA1", "QA2"]);
+  enqueueMany(db, "user-b", ["QB1"], "apex");
+  const playing = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+  assert.equal(playing.queueItem.song_name, "QA1");
+
+  const result = clearPendingQueue(db, { channelId: "cs2", now: 2_000 });
+  assert.equal(result.cancelledCount, 1);
+  assert.deepEqual(
+    db.prepare("SELECT song_name, status FROM music_queue_items ORDER BY id").all(),
+    [
+      { song_name: "QA1", status: "playing" },
+      { song_name: "QA2", status: "cancelled" },
+      { song_name: "QB1", status: "pending" },
+    ]
+  );
   db.close();
 });

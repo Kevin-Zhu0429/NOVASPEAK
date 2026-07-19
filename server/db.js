@@ -13,6 +13,10 @@ import {
   backupBeforeMusicQueueOrderingMigration,
   migrateMusicQueue,
 } from "./music/queue-migrate.js";
+import {
+  backupBeforeChatMigration,
+  migrateChatMessages,
+} from "./chat/migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -214,6 +218,18 @@ if (musicQueueOrderingBackup.backedUp) {
   );
 }
 migrateMusicQueue(db);
+
+// 频道聊天历史：首次建表前同样先做在线备份。
+const chatBackup = await backupBeforeChatMigration(db, {
+  databasePath,
+  preExistingDatabase,
+});
+if (chatBackup.backedUp) {
+  console.log(
+    `Database backup created before chat history migration: ${chatBackup.backupPath}`
+  );
+}
+migrateChatMessages(db);
 
 console.log(`SQLite database ready: ${databasePath}`);
 

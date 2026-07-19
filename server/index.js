@@ -53,6 +53,7 @@ import {
   removeQueueDataForPrincipal,
 } from "./music/music-queue.js";
 import { createMusicBotManager } from "./music/music-bot-manager.js";
+import { createChatRouter } from "./chat/routes.js";
 import {
   DESKTOP_UPDATE_PUBLIC_PATH,
   isAllowedDesktopUpdateAsset,
@@ -1675,6 +1676,16 @@ app.use(
     presenceService: presence,
     onQueueUpdated: (channelId) => musicBotManager.kick(channelId),
     playbackController: musicBotManager,
+  })
+);
+
+app.use(
+  "/api/channels/:channelId/messages",
+  createChatRouter({
+    db,
+    requireAuthenticated,
+    presenceService: presence,
+    env: process.env,
   })
 );
 

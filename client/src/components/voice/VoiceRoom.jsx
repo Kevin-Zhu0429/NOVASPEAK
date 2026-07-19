@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import AudioDevicePanel from "./AudioDevicePanel";
 import ConnectionStatus from "./ConnectionStatus";
@@ -17,6 +17,13 @@ import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPH
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
 import { isNearChatBottom } from "../../utils/chat-scroll";
+import { getChannelMessages, saveChannelMessage } from "../../utils/chat-api";
+import {
+  formatChatTime,
+  mergeChatMessages,
+  normalizeChatMessage,
+  shouldShowChatTimeDivider,
+} from "../../utils/chat-messages";
 
 const CHAT_TOPIC = "nova-chat";
 
@@ -45,7 +52,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [outputId, setOutputId] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [chatHistoryLoading, setChatHistoryLoading] = useState(true);
+  const [chatError, setChatError] = useState("");
   const [messageInput, setMessageInput] = useState("");
   const [retryVersion, setRetryVersion] = useState(0);
   const [baselineVersion, setBaselineVersion] = useState(0);
@@ -54,6 +63,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const roomRef = useRef(null);
   const messagesRef = useRef(null);
   const messagesStickToBottomRef = useRef(true);
+  const seenChatMessageIdsRef = useRef(new Set());
+  const appendChatMessageRef = useRef(null);
   const audioElements = useRef(new Map());
   const deafenRef = useRef(false);
   const restoreMicrophone = useRef(false);
@@ -95,7 +106,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     const container = messagesRef.current;
     if (!container) return;
     messagesStickToBottomRef.current = true;
-    setHasUnreadMessages(false);
+    setUnreadMessageCount(0);
     container.scrollTo({ top: container.scrollHeight, behavior });
   }, []);
 
@@ -104,12 +115,91 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     if (!container) return;
     const nearBottom = isNearChatBottom(container);
     messagesStickToBottomRef.current = nearBottom;
-    if (nearBottom) setHasUnreadMessages(false);
+    if (nearBottom) setUnreadMessageCount(0);
   }, []);
+
+  const appendChatMessage = useCallback((raw, { own = false } = {}) => {
+    const message = normalizeChatMessage(raw);
+    if (!message) return false;
+    if (message.id && seenChatMessageIdsRef.current.has(message.id)) return false;
+    if (message.id) seenChatMessageIdsRef.current.add(message.id);
+    if (own) {
+      messagesStickToBottomRef.current = true;
+      setUnreadMessageCount(0);
+    } else if (!messagesStickToBottomRef.current) {
+      setUnreadMessageCount((count) => count + 1);
+    }
+    setMessages((previous) => mergeChatMessages(previous, [message]));
+    return true;
+  }, []);
+
+  useEffect(() => {
+    appendChatMessageRef.current = appendChatMessage;
+  }, [appendChatMessage]);
 
   useLayoutEffect(() => {
     if (messagesStickToBottomRef.current) scrollToLatestMessages("smooth");
   }, [messages, scrollToLatestMessages]);
+
+  useEffect(() => {
+    if (status !== "connected" && status !== "restored") return undefined;
+    const controller = new AbortController();
+    let retryTimer = null;
+    let resolveRetry = null;
+    const loadHistory = async () => {
+      if (controller.signal.aborted) return;
+      setChatHistoryLoading(true);
+      setChatError("");
+      try {
+        let result = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            result = await getChannelMessages(apiBase, channel.id, {
+              signal: controller.signal,
+            });
+            break;
+          } catch (historyError) {
+            if (
+              historyError?.code !== "CHAT_NOT_IN_CHANNEL" ||
+              attempt === 2 ||
+              controller.signal.aborted
+            ) {
+              throw historyError;
+            }
+            // LiveKit 已连接后，Presence 频道位置可能晚几十毫秒到达后端。
+            await new Promise((resolve) => {
+              resolveRetry = resolve;
+              retryTimer = setTimeout(() => {
+                retryTimer = null;
+                resolveRetry = null;
+                resolve();
+              }, 200);
+            });
+          }
+        }
+        if (controller.signal.aborted || !result) return;
+        const history = Array.isArray(result.messages) ? result.messages : [];
+        for (const message of history) {
+          if (typeof message?.id === "string") {
+            seenChatMessageIdsRef.current.add(message.id);
+          }
+        }
+        setMessages((previous) => mergeChatMessages(history, previous));
+      } catch (historyError) {
+        if (historyError?.name !== "AbortError") {
+          setChatError(historyError?.message || "加载聊天记录失败");
+        }
+      } finally {
+        if (!controller.signal.aborted) setChatHistoryLoading(false);
+      }
+    };
+    queueMicrotask(loadHistory);
+    return () => {
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+      resolveRetry?.();
+    };
+  }, [apiBase, channel.id, status]);
 
   // 解除服务器静音后恢复麦克风：LiveKit permission/metadata 恢复有短暂延迟，
   // 轻量延迟 + 最多 3 次重试；房间切换、Deafen、再次被禁音时中止。
@@ -226,7 +316,10 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         setStatus("connecting");
         setError("");
         messagesStickToBottomRef.current = true;
-        setHasUnreadMessages(false);
+        seenChatMessageIdsRef.current.clear();
+        setUnreadMessageCount(0);
+        setChatHistoryLoading(true);
+        setChatError("");
         setMessages([]);
       }
     });
@@ -278,8 +371,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       try {
         const message = JSON.parse(new TextDecoder().decode(payload));
         if (message && typeof message.text === "string") {
-          if (!messagesStickToBottomRef.current) setHasUnreadMessages(true);
-          setMessages((previous) => [...previous, message]);
+          appendChatMessageRef.current?.(message);
         }
       } catch (dataError) {
         console.error("聊天消息解析失败：", dataError);
@@ -465,16 +557,17 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const sendMessage = async () => {
     const text = messageInput.trim();
     if (!text || !roomRef.current || status === "reconnecting") return;
-    const message = { sender: currentUser.displayName, text, time: new Date().toLocaleTimeString() };
+    setChatError("");
     try {
-      await roomRef.current.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable: true, topic: CHAT_TOPIC });
-      messagesStickToBottomRef.current = true;
-      setHasUnreadMessages(false);
-      setMessages((previous) => [...previous, message]);
+      const saved = await saveChannelMessage(apiBase, channel.id, text);
+      const message = saved?.message;
+      if (!message) throw new Error("服务器返回了无效消息");
+      appendChatMessageRef.current?.(message, { own: true });
       setMessageInput("");
+      await roomRef.current.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable: true, topic: CHAT_TOPIC });
     } catch (sendError) {
       console.error("发送消息失败：", sendError);
-      setError("消息发送失败");
+      setChatError(sendError?.message || "消息发送失败");
     }
   };
 
@@ -519,18 +612,26 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       <div className="voice-room-content">
         <section className="voice-chat-panel">
           <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
-            {messages.length === 0 ? <div className="no-message">暂无聊天消息</div> : messages.map((message, index) => (
-              <div key={`${message.time}-${index}`} className={message.sender === currentUser.displayName ? "message mine" : "message"}>
-                <div className="message-meta"><strong>{message.sender}</strong><span>{message.time}</span></div><div className="message-text">{message.text}</div>
-              </div>
+            {messages.length === 0 ? (
+              <div className="no-message">{chatHistoryLoading ? "正在加载聊天记录……" : "暂无聊天消息"}</div>
+            ) : messages.map((message, index) => (
+              <Fragment key={message.id || `${message.createdAt}-${index}`}>
+                {shouldShowChatTimeDivider(messages[index - 1], message) && (
+                  <div className="chat-time-divider"><span>{formatChatTime(message.createdAt, { divider: true })}</span></div>
+                )}
+                <div className={message.sender === currentUser.displayName ? "message mine" : "message"}>
+                  <div className="message-meta"><strong>{message.sender}</strong><span>{formatChatTime(message.createdAt)}</span></div><div className="message-text">{message.text}</div>
+                </div>
+              </Fragment>
             ))}
           </div>
-          {hasUnreadMessages && (
+          {unreadMessageCount > 0 && (
             <button type="button" className="chat-new-message-button" onClick={() => scrollToLatestMessages("smooth")}>
-              有新消息 ↓
+              {unreadMessageCount} 条新消息 ↓
             </button>
           )}
-          <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
+          {chatError && <div className="chat-inline-error">{chatError}</div>}
+          <div className="message-input-row"><input value={messageInput} maxLength={2000} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
         <VoiceParticipantList apiBase={apiBase} participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>
