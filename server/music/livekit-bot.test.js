@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import {
   MUSIC_BOT_ERROR,
   MUSIC_BOT_NAME,
@@ -31,9 +32,11 @@ function createMockRtc({
   const log = [];
   const captured = { tokens: [], frames: [] };
 
-  class MockRoom {
+  class MockRoom extends EventEmitter {
     constructor() {
+      super();
       this.localParticipant = undefined;
+      captured.room = this;
     }
 
     async connect(url, token, opts) {
@@ -112,6 +115,7 @@ function createMockRtc({
     LocalAudioTrack: MockLocalAudioTrack,
     TrackPublishOptions: MockTrackPublishOptions,
     TrackSource: { SOURCE_MICROPHONE: "SOURCE_MICROPHONE" },
+    RoomEvent: { Disconnected: "disconnected" },
   };
 
   return { rtc, log, captured };
@@ -485,6 +489,35 @@ test("音乐会话：captureFrame 错误映射稳定 MusicBotError；error 与 c
   const names = eventNames(failing.log);
   assert.equal(names.filter((n) => n === "disconnect").length, 1);
   assert.equal(names.filter((n) => n === "source-close").length, 0 + 1);
+});
+
+test("音乐会话：机器人被移出频道后立即失效，通知 manager 且 close 仍幂等", async () => {
+  const { createMusicBotAudioSession } = await import("./livekit-bot.js");
+  const mock = createMockRtc();
+  let notified = 0;
+  const session = await createMusicBotAudioSession({
+    channelId: "kicked-channel",
+    env: testEnv,
+    loadRtc: async () => mock.rtc,
+    onUnexpectedDisconnect: (error) => {
+      assert.equal(error.code, MUSIC_BOT_ERROR.DISCONNECTED);
+      notified += 1;
+    },
+  });
+
+  mock.captured.room.emit("disconnected", "participant_removed");
+  mock.captured.room.emit("disconnected", "duplicate_event");
+
+  assert.equal(session.disconnected, true);
+  assert.equal(notified, 1);
+  await assert.rejects(
+    () => session.captureFrame(new Int16Array(960)),
+    (error) => error.code === MUSIC_BOT_ERROR.DISCONNECTED
+  );
+  await Promise.all([session.close(), session.close()]);
+  const names = eventNames(mock.log);
+  assert.equal(names.filter((name) => name === "source-close").length, 1);
+  assert.equal(names.filter((name) => name === "disconnect").length, 1);
 });
 
 test("音乐会话：RTC 加载失败 → LIVEKIT_RTC_UNAVAILABLE；缺配置 → LIVEKIT_NOT_CONFIGURED", async () => {

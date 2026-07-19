@@ -30,6 +30,7 @@ import {
 } from "./guest-auth.js";
 import { createPresenceService } from "./presence.js";
 import { createVoiceManagementService } from "./voice-management.js";
+import { createOnlineMemberManagementService } from "./online-member-management.js";
 import {
   AVATAR_UPLOAD_BODY_LIMIT,
   createAvatarService,
@@ -183,6 +184,15 @@ const voiceManagement = createVoiceManagementService({
   roomService,
   presenceService: presence,
   channelLookup: (id) => db.prepare("SELECT id, name FROM channels WHERE id = ?").get(id),
+});
+
+const onlineMemberManagement = createOnlineMemberManagementService({
+  presenceService: presence,
+  channelLookup: (id) => getChannelById(db, id),
+  registeredUserLookup: (id) => getAccountUser(id),
+  revokeRegisteredSessions: (userId) => {
+    db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  },
 });
 
 function normalizeVoiceConnectionId(value) {
@@ -1614,6 +1624,35 @@ app.post("/api/voice/participants/move", requireAuthenticated, async (req, res) 
   } catch (error) {
     console.error("Voice move error:", toSafeLiveKitError(error));
     return res.status(502).json({ error: "移动频道失败" });
+  }
+});
+
+app.post("/api/presence/members/move", requireRegistered, (req, res) => {
+  try {
+    const result = onlineMemberManagement.move({
+      actor: req.authUser,
+      targetPresenceId: req.body?.targetPresenceId,
+      targetChannelId: req.body?.targetChannelId,
+    });
+    if (result.error) return res.status(result.status || 500).json({ error: result.error });
+    return res.json({ success: true, message: `已将“${result.targetName}”移动到“${result.targetChannelName}”` });
+  } catch (error) {
+    console.error("Online member move error:", error?.message || "unknown error");
+    return res.status(500).json({ error: "移动在线成员失败" });
+  }
+});
+
+app.post("/api/presence/members/kick", requireRegistered, (req, res) => {
+  try {
+    const result = onlineMemberManagement.kick({
+      actor: req.authUser,
+      targetPresenceId: req.body?.targetPresenceId,
+    });
+    if (result.error) return res.status(result.status || 500).json({ error: result.error });
+    return res.json({ success: true, message: `已将“${result.targetName}”移出服务器` });
+  } catch (error) {
+    console.error("Online member kick error:", error?.message || "unknown error");
+    return res.status(500).json({ error: "移出在线成员失败" });
   }
 });
 

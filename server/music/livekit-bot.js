@@ -15,6 +15,7 @@ export const MUSIC_BOT_ERROR = Object.freeze({
   NOT_CONFIGURED: "LIVEKIT_NOT_CONFIGURED",
   CONNECT_FAILED: "MUSIC_BOT_CONNECT_FAILED",
   PUBLISH_FAILED: "MUSIC_BOT_PUBLISH_FAILED",
+  DISCONNECTED: "MUSIC_BOT_DISCONNECTED",
 });
 
 export class MusicBotError extends Error {
@@ -238,6 +239,7 @@ export async function createMusicBotAudioSession({
   sampleRate = 48000,
   channels = MUSIC_BOT_AUDIO_CHANNELS,
   queueSizeMs = 200,
+  onUnexpectedDisconnect = () => {},
 } = {}) {
   if (typeof channelId !== "string" || !channelId.trim()) {
     throw new MusicBotError(
@@ -262,12 +264,67 @@ export async function createMusicBotAudioSession({
   let source = null;
   let publication = null;
   let closed = false;
+  let disconnected = false;
   let closePromise = null;
+  let sourceClosePromise = null;
+  const disconnectWaiters = new Set();
+  const disconnectedEvent = rtc.RoomEvent?.Disconnected || "disconnected";
+
+  function disconnectedError() {
+    return new MusicBotError(
+      MUSIC_BOT_ERROR.DISCONNECTED,
+      "音乐机器人已与频道断开"
+    );
+  }
+
+  async function closeSource() {
+    if (sourceClosePromise) return sourceClosePromise;
+    if (!source) return undefined;
+    const activeSource = source;
+    source = null;
+    sourceClosePromise = Promise.resolve(activeSource.close()).catch(() => {});
+    return sourceClosePromise;
+  }
+
+  function handleUnexpectedDisconnect() {
+    if (closed || disconnected) return;
+    disconnected = true;
+    const error = disconnectedError();
+    for (const reject of disconnectWaiters) reject(error);
+    disconnectWaiters.clear();
+    // AudioSource 可能正被 captureFrame 背压阻塞；主动关闭使其尽快退出。
+    void closeSource();
+    try {
+      onUnexpectedDisconnect(error);
+    } catch {
+      // 状态通知不能影响 RTC 清理
+    }
+  }
+
+  async function raceWithDisconnect(operation) {
+    if (disconnected) throw disconnectedError();
+    let rejectDisconnect;
+    const disconnectPromise = new Promise((resolve, reject) => {
+      rejectDisconnect = reject;
+      disconnectWaiters.add(reject);
+    });
+    try {
+      return await Promise.race([Promise.resolve(operation), disconnectPromise]);
+    } finally {
+      disconnectWaiters.delete(rejectDisconnect);
+    }
+  }
+
+  room.on?.(disconnectedEvent, handleUnexpectedDisconnect);
 
   // close 幂等：并发调用共享同一 Promise，每项资源最多释放一次
   async function close() {
     if (closePromise) return closePromise;
     closed = true;
+    room.off?.(disconnectedEvent, handleUnexpectedDisconnect);
+    const closeError = disconnectedError();
+    for (const reject of disconnectWaiters) reject(closeError);
+    disconnectWaiters.clear();
     closePromise = (async () => {
       if (publication && room.localParticipant) {
         const sid = publication.sid;
@@ -278,15 +335,7 @@ export async function createMusicBotAudioSession({
           // 忽略清理失败，继续释放其余资源
         }
       }
-      if (source) {
-        const activeSource = source;
-        source = null;
-        try {
-          await activeSource.close();
-        } catch {
-          // 忽略清理失败
-        }
-      }
+      await closeSource();
       try {
         await room.disconnect();
       } catch {
@@ -322,6 +371,7 @@ export async function createMusicBotAudioSession({
         track,
         publishOptions
       );
+      if (disconnected) throw disconnectedError();
     } catch {
       throw new MusicBotError(
         MUSIC_BOT_ERROR.PUBLISH_FAILED,
@@ -341,11 +391,16 @@ export async function createMusicBotAudioSession({
       return closed;
     },
 
+    get disconnected() {
+      return disconnected;
+    },
+
     /**
      * 推送一帧 PCM（Int16Array；默认双声道共 960 个采样值）。
      * 失败转换为稳定 MusicBotError。
      */
     async captureFrame(samples) {
+      if (disconnected) throw disconnectedError();
       if (closed || !source) {
         throw new MusicBotError(
           MUSIC_BOT_ERROR.PUBLISH_FAILED,
@@ -359,8 +414,9 @@ export async function createMusicBotAudioSession({
           channels,
           samples.length / channels
         );
-        await source.captureFrame(frame);
+        await raceWithDisconnect(source.captureFrame(frame));
       } catch (error) {
+        if (error?.code === MUSIC_BOT_ERROR.DISCONNECTED) throw error;
         throw new MusicBotError(
           MUSIC_BOT_ERROR.PUBLISH_FAILED,
           "音频推送失败",
@@ -373,10 +429,12 @@ export async function createMusicBotAudioSession({
      * 等待队列中剩余音频播放完成。失败转换为稳定 MusicBotError。
      */
     async waitForPlayout() {
+      if (disconnected) throw disconnectedError();
       if (closed || !source) return;
       try {
-        await source.waitForPlayout();
+        await raceWithDisconnect(source.waitForPlayout());
       } catch (error) {
+        if (error?.code === MUSIC_BOT_ERROR.DISCONNECTED) throw error;
         throw new MusicBotError(
           MUSIC_BOT_ERROR.PUBLISH_FAILED,
           "等待音频播放完成失败",

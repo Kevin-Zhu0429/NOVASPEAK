@@ -38,7 +38,7 @@ export default function VoiceParticipantList({ apiBase, participants, participan
             />
           ))}
         </div>
-      </> : <OnlineMembersPanel members={onlineMembers} connectionStatus={presenceStatus} embedded />}
+      </> : <OnlineMembersPanel members={onlineMembers} connectionStatus={presenceStatus} embedded currentUser={currentUser} channels={channels} apiBase={apiBase} />}
     </aside>
   );
 }

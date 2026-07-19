@@ -4,6 +4,7 @@ import {
   LOCAL_AUDIO_PREFS_STORAGE_KEY,
   clampMemberVolume,
   getAudioElementPatch,
+  getDefaultMemberVolume,
   getEffectiveVolume,
   getMemberAudioKey,
   getMemberAudioPref,
@@ -26,6 +27,13 @@ function createFakeStorage(initial = {}) {
 test("默认音量为 100", () => {
   assert.equal(getMemberAudioPref({}, "member-1").volume, 100);
   assert.equal(normalizeMemberAudioPref(null).volume, 100);
+});
+
+test("音乐机器人未设置本地偏好时默认音量为 50%，显式设置仍被保留", () => {
+  assert.equal(getDefaultMemberVolume("music-bot:cs2"), 50);
+  assert.equal(getMemberAudioPref({}, "music-bot:cs2").volume, 50);
+  assert.equal(getMemberAudioPref({ "music-bot:cs2": { volume: 80 } }, "music-bot:cs2").volume, 80);
+  assert.equal(getMemberAudioPref({}, "ordinary-member").volume, 100);
 });
 
 test("默认本地静音为 false", () => {

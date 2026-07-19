@@ -406,6 +406,8 @@ input {
   flex: 1;
   overflow-y: auto;
   padding: 22px;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 .no-message {
@@ -415,16 +417,31 @@ input {
 }
 
 .message {
+  position: relative;
+  width: fit-content;
   max-width: 70%;
   margin-bottom: 14px;
-  padding: 12px;
-  border-radius: 12px;
-  background: #1e293b;
+  padding: 11px 14px 12px;
+  border: 1px solid rgba(94, 234, 212, .13);
+  border-radius: 6px 16px 16px 16px;
+  background: linear-gradient(145deg, rgba(19, 42, 54, .96), rgba(15, 23, 42, .94));
+  box-shadow: 0 9px 24px rgba(0, 0, 0, .2), inset 0 1px rgba(255, 255, 255, .035);
+  animation: nova-message-in .2s ease-out both;
+  transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.message:hover {
+  transform: translateY(-1px);
+  border-color: rgba(94, 234, 212, .3);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .25), 0 0 18px rgba(20, 184, 166, .06);
 }
 
 .message.mine {
   margin-left: auto;
-  background: #1d4ed8;
+  border-color: rgba(103, 232, 249, .32);
+  border-radius: 16px 6px 16px 16px;
+  background: linear-gradient(145deg, rgba(8, 145, 178, .92), rgba(15, 118, 110, .92));
+  box-shadow: 0 10px 26px rgba(8, 145, 178, .16), inset 0 1px rgba(255, 255, 255, .08);
 }
 
 .message-meta {
@@ -434,12 +451,30 @@ input {
   font-size: 13px;
 }
 
+.message-meta strong { color: #ccfbf1; font-weight: 700; }
+.message.mine .message-meta strong { color: #ecfeff; }
+
 .message-meta span {
   color: #cbd5e1;
 }
 
 .message-text {
   line-height: 1.5;
+  color: #e2e8f0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message.mine .message-text { color: #f0fdfa; }
+
+@keyframes nova-message-in {
+  from { opacity: 0; transform: translateY(6px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message { animation: none; transition: none; }
+  .messages { scroll-behavior: auto; }
 }
 
 .message-input-row {
@@ -2030,7 +2065,9 @@ input {
 .connection-recovery-actions button { padding: 6px 9px; border-radius: 7px; color: white; background: #0f766e; }
 .connection-recovery-actions .danger { background: #be123c; }
 .voice-room-content { flex: 1; min-height: 0; display: flex; }
-.voice-chat-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid rgba(94, 234, 212, .1); }
+.voice-chat-panel { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid rgba(94, 234, 212, .1); }
+.chat-new-message-button { position: absolute; z-index: 2; right: 22px; bottom: 78px; padding: 7px 12px; border: 1px solid rgba(103, 232, 249, .42); border-radius: 999px; color: #ecfeff; background: rgba(8, 145, 178, .9); box-shadow: 0 8px 24px rgba(0, 0, 0, .28); font-size: 12px; }
+.chat-new-message-button:hover { background: #0891b2; transform: translateY(-1px); }
 .voice-participants-panel { width: 310px; flex: 0 0 310px; min-height: 0; padding: 18px; overflow-y: auto; background: rgba(5, 20, 27, .62); }
 .voice-panel-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
 .voice-panel-title h3 { margin: 0; font-size: 15px; }
@@ -2044,7 +2081,14 @@ input {
 .presence-connection.online { color: #5eead4; }
 .presence-connection.reconnecting { color: #fbbf24; }
 .online-member-list { display: grid; gap: 9px; }
-.online-member-card { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; padding: 12px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 12px; background: rgba(15, 23, 42, .68); }
+.online-member-card { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; padding: 12px 38px 12px 12px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 12px; background: rgba(15, 23, 42, .68); transition: border-color .18s, background .18s; }
+.online-member-card:hover { border-color: rgba(45, 212, 191, .28); background: rgba(15, 42, 52, .76); }
+.online-member-card.operating { opacity: .65; }
+.online-member-menu-button { position: absolute; top: 8px; right: 7px; width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(148, 163, 184, .16); border-radius: 999px; color: #94a3b8; background: rgba(3, 15, 22, .72); }
+.online-member-menu-button:hover { color: #ccfbf1; border-color: rgba(45, 212, 191, .5); }
+.online-member-notice, .online-member-error { margin: -5px 0 10px; padding: 7px 9px; border-radius: 8px; font-size: 11px; }
+.online-member-notice { color: #ccfbf1; background: rgba(15, 118, 110, .2); }
+.online-member-error { color: #fecaca; background: rgba(127, 29, 29, .28); }
 .online-member-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .online-member-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .online-member-copy span { color: #94a3b8; font-size: 12px; }
@@ -2268,6 +2312,9 @@ input {
 .voice-member-menu button, .voice-channel-submenu button { width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; color: #dbeafe; text-align: left; background: transparent; }
 .voice-member-menu button:hover, .voice-channel-submenu button:hover { color: #ecfeff; background: rgba(20, 184, 166, .18); }
 .voice-member-menu button:disabled, .voice-channel-submenu button:disabled { opacity: .52; cursor: not-allowed; }
+.voice-member-menu button.danger { color: #fecaca; }
+.voice-member-menu button.danger:hover { color: #fff1f2; background: rgba(190, 24, 93, .22); }
+.online-member-menu-hint { display: block; padding: 7px 10px; color: #94a3b8; font-size: 11px; line-height: 1.4; }
 .voice-channel-submenu { margin: 0 0 2px 8px; padding-left: 6px; border-left: 1px solid rgba(94, 234, 212, .2); }
 .voice-channel-submenu span { display: block; padding: 7px 10px; color: #94a3b8; font-size: 12px; }
 .voice-card-badges { position: absolute; left: 10px; bottom: 6px; display: flex; align-items: center; gap: 6px; }

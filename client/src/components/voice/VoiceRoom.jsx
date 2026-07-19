@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import AudioDevicePanel from "./AudioDevicePanel";
 import ConnectionStatus from "./ConnectionStatus";
@@ -16,6 +16,7 @@ import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microph
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
+import { isNearChatBottom } from "../../utils/chat-scroll";
 
 const CHAT_TOPIC = "nova-chat";
 
@@ -44,12 +45,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [outputId, setOutputId] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
   const [messageInput, setMessageInput] = useState("");
   const [retryVersion, setRetryVersion] = useState(0);
   const [baselineVersion, setBaselineVersion] = useState(0);
   const [operationMessage, setOperationMessage] = useState("");
   const [participantBusy, setParticipantBusy] = useState("");
   const roomRef = useRef(null);
+  const messagesRef = useRef(null);
+  const messagesStickToBottomRef = useRef(true);
   const audioElements = useRef(new Map());
   const deafenRef = useRef(false);
   const restoreMicrophone = useRef(false);
@@ -86,6 +90,26 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   useEffect(() => { onPresenceLocationChangeRef.current = onPresenceLocationChange; }, [onPresenceLocationChange]);
   useEffect(() => { refreshDevicesRef.current = refreshDevices; }, [refreshDevices]);
   useEffect(() => { microphoneEnabledRef.current = microphoneEnabled; }, [microphoneEnabled]);
+
+  const scrollToLatestMessages = useCallback((behavior = "smooth") => {
+    const container = messagesRef.current;
+    if (!container) return;
+    messagesStickToBottomRef.current = true;
+    setHasUnreadMessages(false);
+    container.scrollTo({ top: container.scrollHeight, behavior });
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesRef.current;
+    if (!container) return;
+    const nearBottom = isNearChatBottom(container);
+    messagesStickToBottomRef.current = nearBottom;
+    if (nearBottom) setHasUnreadMessages(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (messagesStickToBottomRef.current) scrollToLatestMessages("smooth");
+  }, [messages, scrollToLatestMessages]);
 
   // 解除服务器静音后恢复麦克风：LiveKit permission/metadata 恢复有短暂延迟，
   // 轻量延迟 + 最多 3 次重试；房间切换、Deafen、再次被禁音时中止。
@@ -201,6 +225,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         setRoom(activeRoom);
         setStatus("connecting");
         setError("");
+        messagesStickToBottomRef.current = true;
+        setHasUnreadMessages(false);
         setMessages([]);
       }
     });
@@ -251,7 +277,10 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       if (topic !== CHAT_TOPIC || !valid()) return;
       try {
         const message = JSON.parse(new TextDecoder().decode(payload));
-        if (message && typeof message.text === "string") setMessages((previous) => [...previous, message]);
+        if (message && typeof message.text === "string") {
+          if (!messagesStickToBottomRef.current) setHasUnreadMessages(true);
+          setMessages((previous) => [...previous, message]);
+        }
       } catch (dataError) {
         console.error("聊天消息解析失败：", dataError);
       }
@@ -439,6 +468,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     const message = { sender: currentUser.displayName, text, time: new Date().toLocaleTimeString() };
     try {
       await roomRef.current.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable: true, topic: CHAT_TOPIC });
+      messagesStickToBottomRef.current = true;
+      setHasUnreadMessages(false);
       setMessages((previous) => [...previous, message]);
       setMessageInput("");
     } catch (sendError) {
@@ -487,13 +518,18 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       {operationMessage && <div className="voice-operation-message">{operationMessage}</div>}
       <div className="voice-room-content">
         <section className="voice-chat-panel">
-          <div className="messages">
+          <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
             {messages.length === 0 ? <div className="no-message">暂无聊天消息</div> : messages.map((message, index) => (
               <div key={`${message.time}-${index}`} className={message.sender === currentUser.displayName ? "message mine" : "message"}>
                 <div className="message-meta"><strong>{message.sender}</strong><span>{message.time}</span></div><div className="message-text">{message.text}</div>
               </div>
             ))}
           </div>
+          {hasUnreadMessages && (
+            <button type="button" className="chat-new-message-button" onClick={() => scrollToLatestMessages("smooth")}>
+              有新消息 ↓
+            </button>
+          )}
           <div className="message-input-row"><input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
         </section>
         <VoiceParticipantList apiBase={apiBase} participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />

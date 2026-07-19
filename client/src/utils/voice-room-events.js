@@ -41,3 +41,13 @@ export function getForceMovePlan(raw, channels = []) {
   const targetName = targetChannel?.name || command.targetChannelName || "目标频道";
   return { channelId: command.targetChannelId, notice: `你已被移动到“${targetName}”` };
 }
+
+export function getForceLogoutPlan(raw) {
+  try {
+    const message = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (message?.type !== "voice_control" || message.action !== "force_logout") return null;
+    return { notice: "你已被移出服务器，请重新登录" };
+  } catch {
+    return null;
+  }
+}
