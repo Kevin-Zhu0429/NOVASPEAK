@@ -52,6 +52,7 @@ const INFRASTRUCTURE_CODES = new Set([
   "LIVEKIT_NOT_CONFIGURED",
   "MUSIC_BOT_CONNECT_FAILED",
   "MUSIC_BOT_PUBLISH_FAILED",
+  "MUSIC_BOT_DISCONNECTED",
 ]);
 
 // 歌曲/账号明确不可用：skipped，继续下一首
@@ -274,7 +275,13 @@ export function createMusicBotManager({
     // URL / Cookie 只在本函数作用域中短暂存在，不写日志、不入库、不回传
 
     if (!sessionBox.session) {
-      sessionBox.session = await createAudioSession({ channelId, env });
+      sessionBox.session = await createAudioSession({
+        channelId,
+        env,
+        // 机器人被 LiveKit 管理操作移出时立即中止当前解码；worker
+        // 会把歌曲放回原公平位置、关闭旧会话并在退避后重新加入。
+        onUnexpectedDisconnect: () => control.songAbortController?.abort(),
+      });
     }
     const session = sessionBox.session;
 

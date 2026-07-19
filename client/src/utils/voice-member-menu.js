@@ -1,6 +1,8 @@
 export function getParticipantMenuActions({ item, currentUser, currentChannel, channels = [] }) {
   const canManage = !item?.isLocal && ["admin", "member"].includes(currentUser?.role);
-  if (!canManage) return [];
+  // 音乐机器人被移出后会中断整个频道的播放。保留本地音量/静音，
+  // 但不向普通成员菜单提供服务器静音、移动或移出操作。
+  if (!canManage || item?.isMusicBot === true) return [];
   const actions = [];
   if (currentUser?.role === "admin") actions.push(item?.serverMuted ? "unmute" : "mute");
   actions.push("move");

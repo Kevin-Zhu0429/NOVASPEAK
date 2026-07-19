@@ -13,7 +13,7 @@ import usePresence from "./hooks/usePresence";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
 import { findSystemLobby, normalizeUserMessage, sortChannels } from "./utils/channel-settings";
-import { getForceMovePlan } from "./utils/voice-room-events";
+import { getForceLogoutPlan, getForceMovePlan } from "./utils/voice-room-events";
 import "./App.css";
 
 
@@ -45,6 +45,7 @@ export default function App() {
   // voice_control 处理器依赖 handleMovedToChannel（又依赖 presence），
   // 用 ref 间接调用打破循环；usePresence 内部同样按 ref 读取最新回调
   const voiceControlHandlerRef = useRef(null);
+  const forceLogoutRef = useRef(null);
   const handleVoiceControlMessage = useCallback((raw) => {
     voiceControlHandlerRef.current?.(raw);
   }, []);
@@ -224,6 +225,12 @@ export default function App() {
   // handleMovedToChannel 切频道路径，不直接操作 room.connect/disconnect
   useEffect(() => {
     voiceControlHandlerRef.current = (raw) => {
+      const logoutPlan = getForceLogoutPlan(raw);
+      if (logoutPlan) {
+        window.alert(logoutPlan.notice);
+        void forceLogoutRef.current?.();
+        return;
+      }
       const plan = getForceMovePlan(raw, channels);
       if (plan) handleMovedToChannel(plan.channelId, plan.notice);
     };
@@ -265,6 +272,10 @@ export default function App() {
     );
   }
 }
+
+  useEffect(() => {
+    forceLogoutRef.current = logout;
+  });
 
   async function joinChannel(channel) {
     if (!username.trim()) {
@@ -412,7 +423,7 @@ if (!currentUser) {
 
         <main className="chat-panel">
           {!currentChannel ? (
-            <div className="lobby-content"><div className="empty-state" /><OnlineMembersPanel members={presence.members} connectionStatus={presence.connectionStatus} /></div>
+            <div className="lobby-content"><div className="empty-state" /><OnlineMembersPanel members={presence.members} connectionStatus={presence.connectionStatus} currentUser={currentUser} channels={channels} apiBase={API_BASE} /></div>
           ) : (
             <VoiceRoom
               channel={currentChannel}

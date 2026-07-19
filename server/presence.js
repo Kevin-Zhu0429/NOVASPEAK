@@ -375,6 +375,67 @@ export function createPresenceService(options = {}) {
     return delivered;
   }
 
+  function findPrincipalByPresenceId(presenceId) {
+    if (typeof presenceId !== "string" || !presenceId.trim()) return null;
+    for (const [key, principal] of principals) {
+      if (principal.publicPresenceId === presenceId.trim()) return { key, principal };
+    }
+    return null;
+  }
+
+  // 在线成员管理只让前端持有随机 presenceId；真实账号 ID 只在服务端返回给
+  // 管理服务使用，绝不进入 Presence snapshot 或 HTTP 响应。
+  function getManagementTarget(presenceId) {
+    const match = findPrincipalByPresenceId(presenceId);
+    if (!match) return null;
+    const firstState = match.principal.connections.values().next().value;
+    if (!firstState) return null;
+    return {
+      presenceId: match.principal.publicPresenceId,
+      userId: firstState.req?.authUserId || "",
+      role: firstState.req?.authUserRole || (match.principal.profile.isGuest ? "guest" : "member"),
+      isGuest: match.principal.profile.isGuest === true,
+      nickname: match.principal.profile.nickname,
+      ...aggregateConnections(match.principal.connections),
+    };
+  }
+
+  function beginPresenceMemberMove(presenceId, targetChannelId, targetChannelName = "") {
+    const target = getManagementTarget(presenceId);
+    if (!target) return false;
+    return beginParticipantMove(target.userId, targetChannelId, targetChannelName);
+  }
+
+  function cancelPresenceMemberMove(presenceId) {
+    const target = getManagementTarget(presenceId);
+    return target ? cancelParticipantMove(target.userId) : false;
+  }
+
+  function sendVoiceControlToPresenceMember(presenceId, payload) {
+    const match = findPrincipalByPresenceId(presenceId);
+    if (!match) return false;
+    let delivered = false;
+    for (const connection of match.principal.connections.keys()) {
+      if (sendJson(connection, payload)) delivered = true;
+    }
+    return delivered;
+  }
+
+  function disconnectPresenceMember(presenceId, payload) {
+    const match = findPrincipalByPresenceId(presenceId);
+    if (!match) return false;
+    let delivered = false;
+    for (const connection of match.principal.connections.keys()) {
+      if (!sendJson(connection, payload)) continue;
+      delivered = true;
+      const timer = setTimeout(() => {
+        try { connection.close(4003, "已被移出服务器"); } catch { closeAbnormalConnection(connection); }
+      }, 60);
+      timer.unref?.();
+    }
+    return delivered;
+  }
+
   function setConnectionLocation(identity, sourceChannelId, nextState) {
     const match = findChannelConnection(identity, sourceChannelId);
     if (!match) return false;
@@ -451,6 +512,7 @@ export function createPresenceService(options = {}) {
       principal.profile = profileFor(user);
     }
     req.authUserId = user.id;
+    req.authUserRole = user.role;
     principal.connections.set(connection, {
       state: "lobby", channelId: null, channelName: "大厅",
       connectedAt: Date.now(), updatedAt: Date.now(), req,
@@ -605,6 +667,11 @@ export function createPresenceService(options = {}) {
     runIdentityRevalidation,
     sendCommandToChannelConnection,
     sendVoiceControlToParticipant,
+    getManagementTarget,
+    beginPresenceMemberMove,
+    cancelPresenceMemberMove,
+    sendVoiceControlToPresenceMember,
+    disconnectPresenceMember,
     isUserInChannel,
     hasUsersInChannel,
     setConnectionLocation,

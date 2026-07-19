@@ -18,6 +18,20 @@ test("guest has no management menu", () => {
   assert.deepEqual(getParticipantMenuActions({ item, currentUser: { role: "guest" }, currentChannel, channels }), []);
 });
 
+test("音乐机器人只保留本地听音控制，不显示移动或移出操作", () => {
+  const bot = { id: "music-bot:a", isLocal: false, isMusicBot: true };
+  const model = getMemberContextMenuModel({
+    item: bot,
+    currentUser: { role: "admin" },
+    currentChannel,
+    channels,
+    localPref: { volume: 50, muted: false },
+  });
+  assert.equal(model.showLocalControls, true);
+  assert.equal(model.showVolumeSlider, true);
+  assert.deepEqual(model.managementActions, []);
+});
+
 test("admin 右键其他成员包含本地功能和管理功能", () => {
   const model = getMemberContextMenuModel({ item, currentUser: { role: "admin" }, currentChannel, channels, localPref: { volume: 100, muted: false } });
   assert.equal(model.showProfile, true);

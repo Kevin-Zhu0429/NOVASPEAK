@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DisconnectReason } from "livekit-client";
-import { getDisconnectOutcome, getForceMovePlan, parseForceMoveChannelMessage, resolveMovedChannel } from "./voice-room-events.js";
+import { getDisconnectOutcome, getForceLogoutPlan, getForceMovePlan, parseForceMoveChannelMessage, resolveMovedChannel } from "./voice-room-events.js";
 
 test("undefined disconnect reason safely returns lobby", () => {
   assert.doesNotThrow(() => getDisconnectOutcome(undefined));
@@ -52,4 +52,12 @@ test("非 force_move_channel 的 voice_control 与其他消息不误处理", () 
   assert.equal(parseForceMoveChannelMessage("{broken"), null);
   assert.equal(parseForceMoveChannelMessage(null), null);
   assert.equal(getForceMovePlan(forceMoveMessage({ action: "other" }), [{ id: "apex", name: "Apex" }]), null);
+});
+
+test("force_logout 只解析服务端踢出控制消息", () => {
+  assert.deepEqual(getForceLogoutPlan(JSON.stringify({ type: "voice_control", action: "force_logout" })), {
+    notice: "你已被移出服务器，请重新登录",
+  });
+  assert.equal(getForceLogoutPlan(JSON.stringify({ type: "voice_control", action: "force_move_channel" })), null);
+  assert.equal(getForceLogoutPlan("{broken"), null);
 });

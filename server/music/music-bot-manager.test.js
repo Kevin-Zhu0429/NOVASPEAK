@@ -124,6 +124,7 @@ test("classifyPlaybackError：基础设施 / 跳过 / 失败", () => {
   assert.equal(classifyPlaybackError({ code: "MEDIA_RANGE_MISMATCH" }), "fail");
   assert.equal(classifyPlaybackError({ code: "NETEASE_PLAYBACK_RATE_LIMITED" }), "requeue");
   assert.equal(classifyPlaybackError({ code: "MUSIC_BOT_CONNECT_FAILED" }), "requeue");
+  assert.equal(classifyPlaybackError({ code: "MUSIC_BOT_DISCONNECTED" }), "requeue");
   assert.equal(classifyPlaybackError({ code: "NETEASE_PLAYBACK_TRIAL_ONLY" }), "skip");
   assert.equal(classifyPlaybackError({ code: "NETEASE_ACCOUNT_NOT_BOUND" }), "skip");
   assert.equal(classifyPlaybackError({ code: "FFMPEG_DECODE_FAILED" }), "fail");
@@ -555,6 +556,51 @@ test("LiveKit 会话失败 → requeue，pending 保留", async () => {
   assert.ok(attempts >= 1);
   // 歌曲回到 pending（Abort 时 requeue 或错误 requeue）
   assert.equal(statusOf(db, "歌-user-a-" + (songSeq - 1)), "pending");
+  db.close();
+});
+
+test("机器人被移出频道后：当前歌曲回到原位并用新会话自动重连", async () => {
+  const db = createDb();
+  enqueue(db, "user-a", 1);
+  const songName = "歌-user-a-" + (songSeq - 1);
+  let sessionCount = 0;
+  let decodeCount = 0;
+  const closedSessions = [];
+  let disconnectFirstSession = null;
+  const { deps } = makeDeps({
+    createAudioSession: async ({ onUnexpectedDisconnect }) => {
+      sessionCount += 1;
+      const sessionId = sessionCount;
+      if (sessionId === 1) disconnectFirstSession = onUnexpectedDisconnect;
+      return {
+        identity: "music-bot:cs2",
+        captureFrame: async () => {},
+        waitForPlayout: async () => {},
+        close: async () => closedSessions.push(sessionId),
+      };
+    },
+    decodeToFrames: async ({ onFrame, signal }) => {
+      decodeCount += 1;
+      if (decodeCount === 1) {
+        disconnectFirstSession();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(signal.aborted, true);
+        const error = new Error("room disconnected");
+        error.code = "FFMPEG_ABORTED";
+        throw error;
+      }
+      await onFrame(new Int16Array(960));
+      return { framesDelivered: 1 };
+    },
+  });
+
+  const manager = createMusicBotManager({ db, ...deps });
+  manager.kick("cs2");
+  await drain(manager, 3000);
+
+  assert.equal(sessionCount, 2);
+  assert.deepEqual(closedSessions, [1, 2]);
+  assert.equal(statusOf(db, songName), "finished");
   db.close();
 });
 

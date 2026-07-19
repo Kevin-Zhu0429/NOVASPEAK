@@ -1,5 +1,6 @@
 export const LOCAL_AUDIO_PREFS_STORAGE_KEY = "novaVoiceLocalAudioPrefs:v1";
 export const DEFAULT_MEMBER_VOLUME = 100;
+export const DEFAULT_MUSIC_BOT_VOLUME = 50;
 export const MIN_MEMBER_VOLUME = 0;
 export const MAX_MEMBER_VOLUME = 200;
 
@@ -20,6 +21,16 @@ export function clampMemberVolume(value) {
 export function normalizeMemberAudioPref(raw) {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   return { volume: clampMemberVolume(source.volume), muted: source.muted === true };
+}
+
+export function isMusicBotAudioKey(memberKey) {
+  return typeof memberKey === "string" && memberKey.startsWith("music-bot:");
+}
+
+export function getDefaultMemberVolume(memberKey) {
+  return isMusicBotAudioKey(memberKey)
+    ? DEFAULT_MUSIC_BOT_VOLUME
+    : DEFAULT_MEMBER_VOLUME;
 }
 
 // 稳定 member key：identity 形如 "<公开成员ID>:voice:<连接ID>"，取公开成员 ID 部分；
@@ -64,7 +75,9 @@ export function saveLocalAudioPrefs(prefs, storage = defaultStorage()) {
 }
 
 export function getMemberAudioPref(prefs, memberKey) {
-  if (!memberKey || !prefs || typeof prefs !== "object") return normalizeMemberAudioPref(null);
+  const fallback = { volume: getDefaultMemberVolume(memberKey), muted: false };
+  if (!memberKey || !prefs || typeof prefs !== "object") return fallback;
+  if (!Object.prototype.hasOwnProperty.call(prefs, memberKey)) return fallback;
   return normalizeMemberAudioPref(prefs[memberKey]);
 }
 
