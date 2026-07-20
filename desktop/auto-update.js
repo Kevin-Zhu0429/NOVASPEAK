@@ -1,6 +1,6 @@
 const DEFAULT_INITIAL_DELAY_MS = 15_000;
 const DEFAULT_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const UPDATE_FEED_URL = "https://app.novagaming.top/desktop-updates/";
+const UPDATE_FEED_URL = "https://voice.novagaming.top/desktop-updates/";
 
 function isPortableEnvironment(env = process.env) {
   return Boolean(env.PORTABLE_EXECUTABLE_FILE || env.PORTABLE_EXECUTABLE_DIR);

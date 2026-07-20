@@ -1,4 +1,4 @@
-const PROD_APP_URL = "https://app.novagaming.top";
+const PROD_APP_URL = "https://voice.novagaming.top";
 
 function parseHttpUrl(value) {
   try {
