@@ -42,11 +42,11 @@ npm run dev
 | --- | --- |
 | `NOVASPEAK_DESKTOP_DEV=true` | `http://localhost:5173` |
 | 未打包运行(`electron .`)且未设置 `NOVASPEAK_DESKTOP_DEV=false` | `http://localhost:5173` |
-| 其余情况(打包运行,或显式 `NOVASPEAK_DESKTOP_DEV=false`) | `https://app.novagaming.top` |
+| 其余情况(打包运行,或显式 `NOVASPEAK_DESKTOP_DEV=false`) | `https://voice.novagaming.top` |
 
 ## 生产模式
 
-打包版直接加载 `https://app.novagaming.top`，因此页面、`/api`、`/ws`、`/uploads` 和 Session Cookie 都保持同源。朋友电脑只运行 NovaSpeak 客户端，不需要安装 Node.js、FFmpeg、server 或 client；你的服务器与 Cloudflare Tunnel 必须保持在线。
+打包版直接加载 `https://voice.novagaming.top`，因此页面、`/api`、`/ws`、`/uploads` 和 Session Cookie 都保持同源。朋友电脑只运行 NovaSpeak 客户端，不需要安装 Node.js、FFmpeg、server 或 client；上海 ECS 上的 NovaSpeak 与 LiveKit 服务必须保持在线。
 
 主窗口禁止导航到其他来源，外部 HTTP(S) 链接交给系统浏览器。网易云登录仍使用隔离的内存 Session，Cookie 只经 IPC 传到后端加密保存。
 
@@ -76,7 +76,7 @@ npm run dist:win
 更新文件通过以下公开地址提供：
 
 ```text
-https://app.novagaming.top/desktop-updates/
+https://voice.novagaming.top/desktop-updates/
 ```
 
 第一次启用自动更新时，现有用户必须手动安装一次 `0.2.0` 安装版；从这个版本开始才具备 OTA 能力。
@@ -97,7 +97,7 @@ npm run publish:update-local
 `publish:update-local` 默认把 `latest.yml`、安装版 EXE 和 blockmap 复制到 `server/data/desktop-updates/`。如果更新目录在其他位置，可在 `server/.env` 与运行发布命令的 PowerShell 中设置同一个绝对 `DESKTOP_UPDATE_DIR`。
 
 3. 重启或保持 server 运行均可，静态更新文件无需重启即可生效。
-4. 先检查 `https://app.novagaming.top/desktop-updates/latest.yml` 可以访问，再通知用户重启 NovaSpeak 检查更新。
+4. 先检查 `https://voice.novagaming.top/desktop-updates/latest.yml` 可以访问，再通知用户重启 NovaSpeak 检查更新。
 
 必须先完整复制安装包和 blockmap，最后再覆盖 `latest.yml`，避免客户端在文件尚未就绪时读到新版本清单。当前脚本在本机复制速度很快；如果以后改成远程上传，应在部署流程中明确保持这一顺序。
 

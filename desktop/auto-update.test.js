@@ -107,7 +107,7 @@ test("updater errors never log a download URL or raw message", () => {
   fixture.updater.emit("error", {
     name: "Error",
     code: "ERR_UPDATER",
-    message: "https://app.novagaming.top/desktop-updates/private.exe",
+    message: "https://voice.novagaming.top/desktop-updates/private.exe",
   });
   const serialized = JSON.stringify(fixture.logs);
   assert.match(serialized, /ERR_UPDATER/);

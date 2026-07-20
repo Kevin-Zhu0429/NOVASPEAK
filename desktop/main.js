@@ -90,7 +90,7 @@ function createMainWindow() {
     win.loadURL(DEV_SERVER_URL);
   } else {
     // 打包版直接加载同源线上应用，/api、/ws、/uploads 与 Session Cookie
-    // 全部继续由 app.novagaming.top 提供；桌面包中不保存任何后端密钥。
+    // 全部继续由 voice.novagaming.top 提供；桌面包中不保存任何后端密钥。
     win.loadURL(PROD_APP_URL);
   }
 

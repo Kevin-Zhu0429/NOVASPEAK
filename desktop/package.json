@@ -1,15 +1,15 @@
 {
   "name": "novaspeak-desktop",
-  "version": "0.2.1",
+  "version": "3.0.0",
   "private": true,
-  "description": "NovaSpeak Windows 桌面客户端",
-  "author": "NovaSpeak",
+  "description": "NovaSpeak V3.0 正式版",
+  "author": "KAICHEN ZHU",
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
     "start": "electron .",
     "test": "node --test",
-    "dist:win": "electron-builder --win nsis portable --x64 --publish never",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
     "publish:update-local": "node scripts/publish-local-update.js"
   },
   "devDependencies": {
@@ -36,19 +36,13 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://app.novagaming.top/desktop-updates/"
+        "url": "https://voice.novagaming.top/desktop-updates/"
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
           "arch": [
             "x64"
           ]
@@ -60,9 +54,6 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true
-    },
-    "portable": {
-      "artifactName": "NovaSpeak-${version}-${arch}-Portable.${ext}"
     }
   },
   "dependencies": {
