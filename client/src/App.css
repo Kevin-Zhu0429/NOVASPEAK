@@ -119,6 +119,17 @@ input {
   margin-bottom: 24px;
 }
 
+.brand-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.brand-heading-row > div {
+  min-width: 0;
+}
+
 .brand h2 {
   margin: 0;
   font-size: 24px;
@@ -129,6 +140,173 @@ input {
   margin-top: 6px;
   color: #94a3b8;
   font-size: 14px;
+}
+
+.release-notes-button {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border: 1px solid rgba(94, 234, 212, 0.28);
+  border-radius: 9px;
+  color: #99f6e4;
+  background: rgba(15, 118, 110, 0.12);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.release-notes-button:hover {
+  border-color: rgba(94, 234, 212, 0.58);
+  background: rgba(20, 184, 166, 0.22);
+}
+
+.release-notes-button:focus-visible,
+.release-notes-header button:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: 2px;
+}
+
+.app-version-badge {
+  position: fixed;
+  z-index: 25;
+  right: 12px;
+  bottom: 8px;
+  padding: 3px 7px;
+  border: 1px solid rgba(94, 234, 212, 0.16);
+  border-radius: 999px;
+  color: rgba(204, 251, 241, 0.7);
+  background: rgba(3, 15, 22, 0.72);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.release-notes-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(12px);
+}
+
+.release-notes-dialog {
+  width: min(640px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(94, 234, 212, 0.24);
+  border-radius: 20px;
+  background: linear-gradient(150deg, rgba(7, 28, 37, 0.99), rgba(3, 15, 22, 0.99));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+}
+
+.release-notes-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid rgba(94, 234, 212, 0.12);
+}
+
+.release-notes-header span {
+  color: #2dd4bf;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+.release-notes-header h2 {
+  margin: 5px 0 4px;
+  color: #ecfeff;
+  font-size: 22px;
+}
+
+.release-notes-header p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.release-notes-header button {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.release-notes-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px 22px;
+}
+
+.release-note-card {
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.release-note-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.release-note-title-row > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.release-note-title-row strong {
+  color: #f0fdfa;
+  font-size: 18px;
+}
+
+.release-note-title-row span,
+.release-note-title-row time {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.release-kind {
+  width: fit-content;
+  margin-top: 9px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.release-kind.web {
+  color: #99f6e4;
+  background: rgba(13, 148, 136, 0.18);
+}
+
+.release-kind.desktop {
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.release-note-card ul {
+  margin: 12px 0 0;
+  padding-left: 19px;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .channel-section {
@@ -2342,6 +2520,8 @@ input {
 @media (max-width: 760px) {
   .main-layout { height: 100dvh; }
   .sidebar { width: 190px; padding: 12px; }
+  .brand-heading-row { flex-direction: column; }
+  .release-notes-button { width: 100%; }
   .voice-room { padding-bottom: 72px; }
   .voice-room-header { min-height: 90px; padding: 13px 14px; }
   .voice-room-content { flex-direction: column-reverse; overflow-y: auto; }
@@ -2356,6 +2536,10 @@ input {
   .voice-control-bar button span { display: none; }
 }
 @media (max-width: 520px) {
+  .release-notes-overlay { padding: 10px; }
+  .release-notes-header { padding: 18px; }
+  .release-notes-list { padding: 14px; }
+  .release-note-title-row { align-items: flex-start; }
   .music-panel { right: 10px; bottom: 74px; width: min(440px, calc(100% - 20px)); max-height: min(520px, calc(100% - 86px)); padding: 12px; gap: 10px; }
   .music-panel-body { padding-right: 10px; }
   .music-account { min-height: 60px; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
