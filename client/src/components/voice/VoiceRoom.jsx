@@ -6,6 +6,8 @@ import NetworkStats from "./NetworkStats";
 import VoiceControlBar from "./VoiceControlBar";
 import VoiceParticipantList from "./VoiceParticipantList";
 import MusicPanel from "../music/MusicPanel";
+import ChatComposer from "../chat/ChatComposer";
+import ChatMessageAttachment from "../chat/ChatMessageAttachment";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
@@ -17,7 +19,7 @@ import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPH
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
 import { isNearChatBottom } from "../../utils/chat-scroll";
-import { getChannelMessages, saveChannelMessage } from "../../utils/chat-api";
+import { getChannelMessages, saveChannelAttachment, saveChannelMessage } from "../../utils/chat-api";
 import {
   formatChatTime,
   mergeChatMessages,
@@ -55,6 +57,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [chatHistoryLoading, setChatHistoryLoading] = useState(true);
   const [chatError, setChatError] = useState("");
+  const [chatSending, setChatSending] = useState(false);
   const [messageInput, setMessageInput] = useState("");
   const [retryVersion, setRetryVersion] = useState(0);
   const [baselineVersion, setBaselineVersion] = useState(0);
@@ -554,21 +557,42 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     }
   };
 
-  const sendMessage = async () => {
-    const text = messageInput.trim();
-    if (!text || !roomRef.current || status === "reconnecting") return;
+  const sendMessage = async ({ text = messageInput, files = [] } = {}) => {
+    const normalizedText = text.trim();
+    const pendingFiles = Array.isArray(files) ? files : [];
+    const result = { textSent: false, sentFiles: 0 };
+    if ((!normalizedText && pendingFiles.length === 0) || !roomRef.current || status === "reconnecting") return result;
     setChatError("");
-    try {
-      const saved = await saveChannelMessage(apiBase, channel.id, text);
+    setChatSending(true);
+    let realtimeSyncFailed = false;
+    const acceptSavedMessage = async (saved) => {
       const message = saved?.message;
       if (!message) throw new Error("服务器返回了无效消息");
       appendChatMessageRef.current?.(message, { own: true });
-      setMessageInput("");
-      await roomRef.current.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable: true, topic: CHAT_TOPIC });
+      try {
+        await roomRef.current.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable: true, topic: CHAT_TOPIC });
+      } catch {
+        realtimeSyncFailed = true;
+      }
+    };
+    try {
+      if (normalizedText) {
+        await acceptSavedMessage(await saveChannelMessage(apiBase, channel.id, normalizedText));
+        result.textSent = true;
+        setMessageInput("");
+      }
+      for (const file of pendingFiles) {
+        await acceptSavedMessage(await saveChannelAttachment(apiBase, channel.id, file));
+        result.sentFiles += 1;
+      }
+      if (realtimeSyncFailed) setChatError("消息已保存，但实时同步暂时失败");
     } catch (sendError) {
       console.error("发送消息失败：", sendError);
       setChatError(sendError?.message || "消息发送失败");
+    } finally {
+      setChatSending(false);
     }
+    return result;
   };
 
 
@@ -620,7 +644,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
                   <div className="chat-time-divider"><span>{formatChatTime(message.createdAt, { divider: true })}</span></div>
                 )}
                 <div className={message.sender === currentUser.displayName ? "message mine" : "message"}>
-                  <div className="message-meta"><strong>{message.sender}</strong><span>{formatChatTime(message.createdAt)}</span></div><div className="message-text">{message.text}</div>
+                  <div className="message-meta"><strong>{message.sender}</strong><span>{formatChatTime(message.createdAt)}</span></div>
+                  {message.text && <div className="message-text">{message.text}</div>}
+                  {message.attachment && <ChatMessageAttachment attachment={message.attachment} />}
                 </div>
               </Fragment>
             ))}
@@ -631,7 +657,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
             </button>
           )}
           {chatError && <div className="chat-inline-error">{chatError}</div>}
-          <div className="message-input-row"><input value={messageInput} maxLength={2000} onChange={(event) => setMessageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendMessage(); }} placeholder="输入消息，按 Enter 发送" disabled={controlsDisabled} /><button type="button" onClick={sendMessage} disabled={controlsDisabled}>发送</button></div>
+          <ChatComposer value={messageInput} onChange={setMessageInput} onSend={sendMessage} disabled={controlsDisabled} sending={chatSending} />
         </section>
         <VoiceParticipantList apiBase={apiBase} participants={participants} participantLoss={networkStats.participantLoss} onlineMembers={onlineMembers} presenceStatus={presenceStatus} currentUser={currentUser} currentChannel={channel} channels={channels} participantBusy={participantBusy} onManageParticipant={manageParticipant} localAudioPrefs={localAudioPrefs} onSetMemberVolume={setMemberVolume} onSetMemberLocalMuted={setMemberLocalMuted} />
       </div>

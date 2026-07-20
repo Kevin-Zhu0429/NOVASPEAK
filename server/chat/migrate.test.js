@@ -62,6 +62,39 @@ test("全新数据库不创建迁移备份", async () => {
   }
 });
 
+test("既有聊天表增加附件字段前单独备份，迁移可重复", async () => {
+  const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), "novaspeak-chat-attachments-"));
+  try {
+    const databasePath = path.join(root, "novaspeak.db");
+    const db = new Database(databasePath);
+    db.exec(`
+      CREATE TABLE channels (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE channel_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        sender_principal_key TEXT NOT NULL,
+        sender_display_name TEXT NOT NULL,
+        message_text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    const backup = await backupBeforeChatMigration(db, {
+      databasePath,
+      preExistingDatabase: true,
+      now: new Date("2026-01-02T03:04:05.000Z"),
+    });
+    assert.equal(path.basename(backup.backupPath), "novaspeak-before-chat-attachments-20260102T030405.db");
+    migrateChatMessages(db);
+    migrateChatMessages(db);
+    const columns = new Set(db.prepare("PRAGMA table_info(channel_messages)").all().map((column) => column.name));
+    assert.equal(columns.has("attachment_storage_name"), true);
+    assert.deepEqual(await backupBeforeChatMigration(db, { databasePath, preExistingDatabase: true }), { backedUp: false, reason: "already-migrated" });
+    db.close();
+  } finally {
+    await fsPromises.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("聊天迁移备份失败时中止且不创建表", async () => {
   const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), "novaspeak-chat-fail-"));
   try {

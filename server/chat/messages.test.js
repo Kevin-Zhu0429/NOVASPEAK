@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { migrateChatMessages } from "./migrate.js";
 import {
   getChatHistoryLimit,
+  listChannelAttachmentStorageNames,
   listRecentChannelMessages,
   normalizeChatText,
   saveChannelMessage,
@@ -69,6 +70,43 @@ test("公开消息不包含内部 principal key", () => {
     createdAt: 123,
   });
   assert.equal(JSON.stringify(message).includes("secret-uuid"), false);
+  db.close();
+});
+
+test("附件消息公开受控 URL，历史裁剪时通知清理文件", () => {
+  const db = createDb();
+  const removed = [];
+  const message = saveChannelMessage(db, {
+    channelId: "lobby",
+    senderPrincipalKey: "user:1",
+    senderDisplayName: "成员",
+    text: "",
+    attachment: {
+      storageName: "12345678123412341234123456789abc.png",
+      originalName: "截图.png",
+      mimeType: "image/png",
+      size: 88,
+    },
+    historyLimit: 1,
+    onAttachmentsPruned: (name) => removed.push(name),
+  });
+  assert.deepEqual(message.attachment, {
+    url: "/api/channels/lobby/messages/attachments/12345678123412341234123456789abc.png",
+    name: "截图.png",
+    mimeType: "image/png",
+    size: 88,
+    kind: "image",
+  });
+  assert.deepEqual(listChannelAttachmentStorageNames(db, "lobby"), ["12345678123412341234123456789abc.png"]);
+  saveChannelMessage(db, {
+    channelId: "lobby",
+    senderPrincipalKey: "user:1",
+    senderDisplayName: "成员",
+    text: "下一条",
+    historyLimit: 1,
+    onAttachmentsPruned: (name) => removed.push(name),
+  });
+  assert.deepEqual(removed, ["12345678123412341234123456789abc.png"]);
   db.close();
 });
 

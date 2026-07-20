@@ -25,3 +25,20 @@ test("消息标准化拒绝空文本，时间格式对非法输入安全", () =>
   assert.equal(normalizeChatMessage({ text: "   " }), null);
   assert.equal(formatChatTime("bad"), "");
 });
+
+test("附件消息允许空文本并拒绝危险附件 URL", () => {
+  const message = normalizeChatMessage({
+    id: "3",
+    sender: "A",
+    text: "",
+    createdAt: 123,
+    attachment: {
+      url: "/api/channels/lobby/messages/attachments/abc.png",
+      name: "截图.png",
+      mimeType: "image/png",
+      size: 123,
+    },
+  });
+  assert.equal(message.attachment.kind, "image");
+  assert.equal(normalizeChatMessage({ text: "", attachment: { url: "javascript:alert(1)", name: "x.png", mimeType: "image/png", size: 1 } }), null);
+});

@@ -70,7 +70,7 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
           songName={musicNowPlaying.song.name}
         />
       ) : (
-        <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="md" status={item.isSpeaking ? "speaking" : ""} />
+        <UserAvatar avatarUrl={avatarUrl} displayName={item.displayName} size="list" status={item.isSpeaking ? "speaking" : ""} />
       )}
       {musicNowPlaying ? (
         <div className="music-bot-participant-copy">

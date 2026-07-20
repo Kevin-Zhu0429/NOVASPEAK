@@ -23,13 +23,25 @@ export function normalizeChatText(value) {
 }
 
 function publicMessage(row) {
-  return {
+  const message = {
     id: String(row.id),
     channelId: row.channel_id,
     sender: row.sender_display_name,
     text: row.message_text,
     createdAt: row.created_at,
   };
+  if (row.attachment_storage_name) {
+    const channelId = encodeURIComponent(row.channel_id);
+    const storageName = encodeURIComponent(row.attachment_storage_name);
+    message.attachment = {
+      url: `/api/channels/${channelId}/messages/attachments/${storageName}`,
+      name: row.attachment_original_name,
+      mimeType: row.attachment_mime_type,
+      size: row.attachment_size,
+      kind: String(row.attachment_mime_type || "").startsWith("image/") ? "image" : "file",
+    };
+  }
+  return message;
 }
 
 export function listRecentChannelMessages(db, { channelId, limit }) {
@@ -39,9 +51,13 @@ export function listRecentChannelMessages(db, { channelId, limit }) {
   );
   return db
     .prepare(`
-      SELECT id, channel_id, sender_display_name, message_text, created_at
+      SELECT id, channel_id, sender_display_name, message_text,
+             attachment_storage_name, attachment_original_name,
+             attachment_mime_type, attachment_size, created_at
       FROM (
-        SELECT id, channel_id, sender_display_name, message_text, created_at
+        SELECT id, channel_id, sender_display_name, message_text,
+               attachment_storage_name, attachment_original_name,
+               attachment_mime_type, attachment_size, created_at
         FROM channel_messages
         WHERE channel_id = ?
         ORDER BY id DESC
@@ -60,11 +76,13 @@ export function saveChannelMessage(
     senderPrincipalKey,
     senderDisplayName,
     text,
+    attachment = null,
     historyLimit = DEFAULT_CHAT_HISTORY_LIMIT,
     now = Date.now(),
+    onAttachmentsPruned = null,
   }
 ) {
-  return db.transaction(() => {
+  const result = db.transaction(() => {
     const channel = db.prepare("SELECT id FROM channels WHERE id = ?").get(channelId);
     if (!channel) {
       const error = new Error("频道不存在");
@@ -73,9 +91,34 @@ export function saveChannelMessage(
     }
     const info = db.prepare(`
       INSERT INTO channel_messages (
-        channel_id, sender_principal_key, sender_display_name, message_text, created_at
-      ) VALUES (?, ?, ?, ?, ?)
-    `).run(channelId, senderPrincipalKey, senderDisplayName, text, now);
+        channel_id, sender_principal_key, sender_display_name, message_text,
+        attachment_storage_name, attachment_original_name,
+        attachment_mime_type, attachment_size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      channelId,
+      senderPrincipalKey,
+      senderDisplayName,
+      typeof text === "string" ? text : "",
+      attachment?.storageName || null,
+      attachment?.originalName || null,
+      attachment?.mimeType || null,
+      Number.isInteger(attachment?.size) ? attachment.size : null,
+      now
+    );
+
+    const prunedAttachments = db.prepare(`
+      SELECT attachment_storage_name AS storageName
+      FROM channel_messages
+      WHERE channel_id = ?
+        AND attachment_storage_name IS NOT NULL
+        AND id NOT IN (
+          SELECT id FROM channel_messages
+          WHERE channel_id = ?
+          ORDER BY id DESC
+          LIMIT ?
+        )
+    `).all(channelId, channelId, historyLimit);
 
     db.prepare(`
       DELETE FROM channel_messages
@@ -88,11 +131,39 @@ export function saveChannelMessage(
         )
     `).run(channelId, channelId, historyLimit);
 
-    return publicMessage(
+    return {
+      message: publicMessage(
       db.prepare(`
-        SELECT id, channel_id, sender_display_name, message_text, created_at
+        SELECT id, channel_id, sender_display_name, message_text,
+               attachment_storage_name, attachment_original_name,
+               attachment_mime_type, attachment_size, created_at
         FROM channel_messages WHERE id = ?
       `).get(info.lastInsertRowid)
-    );
+      ),
+      prunedAttachments,
+    };
   })();
+
+  if (typeof onAttachmentsPruned === "function") {
+    for (const item of result.prunedAttachments) onAttachmentsPruned(item.storageName);
+  }
+  return result.message;
+}
+
+export function getChannelAttachment(db, { channelId, storageName }) {
+  return db.prepare(`
+    SELECT attachment_original_name AS originalName,
+           attachment_mime_type AS mimeType,
+           attachment_size AS size
+    FROM channel_messages
+    WHERE channel_id = ? AND attachment_storage_name = ?
+  `).get(channelId, storageName) || null;
+}
+
+export function listChannelAttachmentStorageNames(db, channelId) {
+  return db.prepare(`
+    SELECT attachment_storage_name AS storageName
+    FROM channel_messages
+    WHERE channel_id = ? AND attachment_storage_name IS NOT NULL
+  `).all(channelId).map((row) => row.storageName);
 }

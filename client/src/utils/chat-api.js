@@ -37,3 +37,19 @@ export async function saveChannelMessage(apiBase, channelId, text, { fetchImpl =
   });
   return parseJson(response, "发送聊天消息失败");
 }
+
+export async function saveChannelAttachment(apiBase, channelId, file, { fetchImpl = fetch } = {}) {
+  if (!file || typeof file.name !== "string" || typeof file.size !== "number") {
+    throw new Error("文件无效");
+  }
+  const response = await fetchImpl(`${apiBase}${channelPath(channelId)}/attachments`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Nova-File-Name": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  return parseJson(response, "发送文件失败");
+}

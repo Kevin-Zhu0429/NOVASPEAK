@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getChannelMessages, saveChannelMessage } from "./chat-api.js";
+import { getChannelMessages, saveChannelAttachment, saveChannelMessage } from "./chat-api.js";
 
 function response(data, { ok = true, status = 200 } = {}) {
   return {
@@ -29,4 +29,16 @@ test("保存消息只提交修剪后的 text", async () => {
   });
   assert.equal(calls[0][1].method, "POST");
   assert.deepEqual(JSON.parse(calls[0][1].body), { text: "hello" });
+});
+
+test("附件使用二进制请求且文件名只进入编码后的请求头", async () => {
+  const calls = [];
+  const file = { name: "聊天 截图.png", size: 123 };
+  await saveChannelAttachment("", "cs2", file, {
+    fetchImpl: async (...args) => { calls.push(args); return response({ message: { id: "2" } }, { status: 201 }); },
+  });
+  assert.equal(calls[0][0], "/api/channels/cs2/messages/attachments");
+  assert.equal(calls[0][1].headers["Content-Type"], "application/octet-stream");
+  assert.equal(calls[0][1].headers["X-Nova-File-Name"], encodeURIComponent(file.name));
+  assert.equal(calls[0][1].body, file);
 });

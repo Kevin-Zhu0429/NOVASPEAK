@@ -23,7 +23,7 @@ function OnlineMemberCard({ member, currentUser, channels, busy, onMove, onKick 
   };
   return (
     <article className={`online-member-card ${member.state} ${busy ? "operating" : ""}`} onContextMenu={openMenu}>
-      <UserAvatar avatarUrl={member.avatarUrl} displayName={member.nickname} size="md" status="online" />
+      <UserAvatar avatarUrl={member.avatarUrl} displayName={member.nickname} size="list" status="online" />
       <div className="online-member-copy">
         <strong>{member.nickname}{member.isCurrentUser ? "（我）" : ""}</strong>
         <span>{getPresencePositionText(member)}</span>

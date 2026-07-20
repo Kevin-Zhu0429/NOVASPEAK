@@ -54,6 +54,8 @@ import {
 } from "./music/music-queue.js";
 import { createMusicBotManager } from "./music/music-bot-manager.js";
 import { createChatRouter } from "./chat/routes.js";
+import { createChatAttachmentStore } from "./chat/attachments.js";
+import { listChannelAttachmentStorageNames } from "./chat/messages.js";
 import {
   DESKTOP_UPDATE_PUBLIC_PATH,
   isAllowedDesktopUpdateAsset,
@@ -77,6 +79,7 @@ const uploadsDirectory = process.env.NOVASPEAK_UPLOADS_DIR
   : path.join(__dirname, "uploads");
 
 const avatarsDirectory = path.join(uploadsDirectory, "avatars");
+const chatAttachmentsDirectory = path.join(uploadsDirectory, "chat");
 const desktopUpdateDirectory = resolveDesktopUpdateDirectory({
   env: process.env,
   serverDirectory: __dirname,
@@ -179,6 +182,9 @@ const presence = createPresenceService();
 const avatarService = createAvatarService({
   db,
   avatarsDirectory,
+});
+const chatAttachmentStore = createChatAttachmentStore({
+  attachmentsDirectory: chatAttachmentsDirectory,
 });
 
 const voiceManagement = createVoiceManagementService({
@@ -965,7 +971,9 @@ app.delete("/api/channels/:channelId", requireAdmin, async (req, res) => {
       return res.status(503).json({ error: "暂时无法确认频道占用状态，请稍后再试" });
     }
     if (participantCount > 0) return res.status(409).json({ error: "频道内仍有成员，无法删除" });
+    const attachmentNames = listChannelAttachmentStorageNames(db, channel.id);
     db.prepare("DELETE FROM channels WHERE id = ?").run(channel.id);
+    for (const storageName of attachmentNames) chatAttachmentStore.remove(storageName);
     res.json({ ok: true, deletedChannelId: channel.id });
   } catch (error) {
     console.error("Delete channel error:", error);
@@ -1685,6 +1693,7 @@ app.use(
     db,
     requireAuthenticated,
     presenceService: presence,
+    attachmentStore: chatAttachmentStore,
     env: process.env,
   })
 );
