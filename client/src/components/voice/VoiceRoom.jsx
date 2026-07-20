@@ -11,9 +11,10 @@ import ChatMessageAttachment from "../chat/ChatMessageAttachment";
 import useAudioDevices from "../../hooks/useAudioDevices";
 import useLocalAudioPreferences from "../../hooks/useLocalAudioPreferences";
 import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
+import useTransientMessage from "../../hooks/useTransientMessage";
 import useVoiceGate from "../../hooks/useVoiceGate";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
-import { getMemberAudioKey, getMemberAudioPref, getRemoteAudioPlaybackPlan } from "../../utils/local-audio-preferences";
+import { applyRemoteAudioPlaybackPreference, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
 import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
@@ -61,7 +62,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const [messageInput, setMessageInput] = useState("");
   const [retryVersion, setRetryVersion] = useState(0);
   const [baselineVersion, setBaselineVersion] = useState(0);
-  const [operationMessage, setOperationMessage] = useState("");
+  const [operationMessage, setOperationMessage] = useTransientMessage();
   const [participantBusy, setParticipantBusy] = useState("");
   const roomRef = useRef(null);
   const messagesRef = useRef(null);
@@ -225,7 +226,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       }
     }
     if (roomRef.current === activeRoom) setOperationMessage(MICROPHONE_RESTORE_FAILED_MESSAGE);
-  }, []);
+  }, [setOperationMessage]);
 
   const syncLocalServerMuteStatus = useCallback((activeRoom, { notify = false } = {}) => {
     if (!activeRoom?.localParticipant) return false;
@@ -246,7 +247,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     if (notify && transition.message) setOperationMessage(shouldRestore ? MICROPHONE_RESTORING_MESSAGE : transition.message);
     if (shouldRestore) restoreMicrophoneAfterServerUnmute();
     return transition.current;
-  }, [restoreMicrophoneAfterServerUnmute]);
+  }, [restoreMicrophoneAfterServerUnmute, setOperationMessage]);
 
   const syncParticipants = useCallback((activeRoom, options = {}) => {
     if (!activeRoom) return;
@@ -276,26 +277,16 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const applyLocalAudioPrefs = useCallback(() => {
     for (const entry of audioElements.current.values()) {
       const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(entry.participantIdentity));
-      let plan = getRemoteAudioPlaybackPlan({
+      const result = applyRemoteAudioPlaybackPreference({
+        track: entry.track,
+        element: entry.element,
         deafened: deafenRef.current,
         localMuted: pref.muted,
         volume: pref.volume,
-        webAudioEnabled: entry.webAudioEnabled,
+        // AudioContext 可能在 TrackSubscribed 之后才准备好，每次都重新探测。
+        webAudioEnabled: Boolean(entry.room?.audioContext),
       });
-      try {
-        if (plan.trackVolume !== null) entry.track.setVolume(plan.trackVolume);
-      } catch {
-        // 极少数浏览器创建 AudioContext 失败时退回原生 audio 音量。
-        entry.webAudioEnabled = false;
-        plan = getRemoteAudioPlaybackPlan({
-          deafened: deafenRef.current,
-          localMuted: pref.muted,
-          volume: pref.volume,
-          webAudioEnabled: false,
-        });
-      }
-      entry.element.muted = plan.elementMuted;
-      entry.element.volume = plan.elementVolume;
+      entry.webAudioEnabled = result.webAudioEnabled;
     }
   }, []);
 
@@ -336,30 +327,15 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       element.controls = false;
       element.className = "voice-remote-audio";
       const participantIdentity = participant?.identity || "";
-      const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(participantIdentity));
-      let webAudioEnabled = Boolean(activeRoom.audioContext && typeof track.setVolume === "function");
-      let plan = getRemoteAudioPlaybackPlan({
-        deafened: deafenRef.current,
-        localMuted: pref.muted,
-        volume: pref.volume,
-        webAudioEnabled,
-      });
-      try {
-        if (plan.trackVolume !== null) track.setVolume(plan.trackVolume);
-      } catch {
-        webAudioEnabled = false;
-        plan = getRemoteAudioPlaybackPlan({
-          deafened: deafenRef.current,
-          localMuted: pref.muted,
-          volume: pref.volume,
-          webAudioEnabled: false,
-        });
-      }
-      element.muted = plan.elementMuted;
-      element.volume = plan.elementVolume;
+      const entry = { track, element, participantIdentity, room: activeRoom, webAudioEnabled: false };
+      audioElements.current.set(publication.trackSid, entry);
+      applyLocalAudioPrefs();
       document.body.appendChild(element);
-      audioElements.current.set(publication.trackSid, { track, element, participantIdentity, webAudioEnabled });
-      element.play().catch(() => valid() && setAudioBlocked(true));
+      Promise.resolve(element.play())
+        // LiveKit 可能在开始播放时才建立 Web Audio GainNode，播放成功后必须
+        // 再应用一次保存值，避免滑块显示 10% 而实际音轨仍是默认增益。
+        .then(() => { if (valid()) applyLocalAudioPrefs(); })
+        .catch(() => valid() && setAudioBlocked(true));
     };
     const detachAudio = (track, publication) => {
       const entry = audioElements.current.get(publication.trackSid);
@@ -403,9 +379,9 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     };
 
     activeRoom
-      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); onChannelsChangedRef.current?.(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
+      .on(RoomEvent.Connected, () => { if (valid()) { setStatus("connected"); sync(); applyLocalAudioPrefs(); onChannelsChangedRef.current?.(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
       .on(RoomEvent.Reconnecting, () => { if (valid()) { setStatus("reconnecting"); setBaselineVersion((value) => value + 1); onPresenceLocationChangeRef.current?.({ state: "reconnecting", channelId: channel.id }); } })
-      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
+      .on(RoomEvent.Reconnected, () => { if (valid()) { setStatus("restored"); setError(""); setBaselineVersion((value) => value + 1); sync(); applyLocalAudioPrefs(); onPresenceLocationChangeRef.current?.({ state: "in_channel", channelId: channel.id }); } })
       .on(RoomEvent.Moved, onMoved)
       .on(RoomEvent.Disconnected, onDisconnected)
       .on(RoomEvent.ParticipantConnected, sync)
@@ -420,7 +396,11 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       .on(RoomEvent.ParticipantPermissionsChanged, (participant) => { if (!valid()) return; sync({ notify: participant?.isLocal === true || participant === activeRoom.localParticipant }); })
       .on(RoomEvent.TrackSubscribed, (track, publication, participant) => { if (!valid()) return; attachAudio(track, publication, participant); sync(); })
       .on(RoomEvent.TrackUnsubscribed, (track, publication) => { if (!valid()) return; detachAudio(track, publication); sync(); })
-      .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => valid() && setAudioBlocked(!canPlayback))
+      .on(RoomEvent.AudioPlaybackStatusChanged, (canPlayback) => {
+        if (!valid()) return;
+        setAudioBlocked(!canPlayback);
+        if (canPlayback) applyLocalAudioPrefs();
+      })
       .on(RoomEvent.DataReceived, onData);
 
     (async () => {
@@ -470,7 +450,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       const disconnected = cleanupVoiceRoomAttempt({ room: activeRoom, roomRef, disconnectReasonRef, reason: "effect-cleanup" });
       if (disconnected) voiceLifecycleDebug("disconnect-called", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, reason: "effect-cleanup" });
     };
-  }, [apiBase, channel.id, retryVersion, cleanupAudio, syncParticipants]);
+  }, [apiBase, channel.id, retryVersion, applyLocalAudioPrefs, cleanupAudio, syncParticipants]);
 
   const toggleMicrophone = async () => {
     const activeRoom = roomRef.current;
@@ -550,6 +530,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     try {
       await roomRef.current?.startAudio();
       for (const { element } of audioElements.current.values()) await element.play();
+      applyLocalAudioPrefs();
       setAudioBlocked(false);
     } catch (playError) {
       console.error("启用音频失败：", playError);

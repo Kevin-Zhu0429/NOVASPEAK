@@ -10,6 +10,7 @@ import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
 import UserAvatar from "./components/common/UserAvatar";
 import usePresence from "./hooks/usePresence";
+import useTransientMessage from "./hooks/useTransientMessage";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
 import { findSystemLobby, normalizeUserMessage, sortChannels } from "./utils/channel-settings";
@@ -35,7 +36,7 @@ export default function App() {
   const [showTeamMembers, setShowTeamMembers] = useState(false);
   const [showChannelManagement, setShowChannelManagement] = useState(false);
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
-  const [voiceNotice, setVoiceNotice] = useState("");
+  const [voiceNotice, setVoiceNotice] = useTransientMessage();
   const channelRequestIdRef = useRef(0);
   const lastChannelFetchErrorRef = useRef("");
   const lobbyAutoJoinUserRef = useRef("");
@@ -218,7 +219,7 @@ export default function App() {
       const safeMessage = normalizeUserMessage(message);
       if (safeMessage) setVoiceNotice(safeMessage);
     }
-  }, [channels, presence]);
+  }, [channels, presence, setVoiceNotice]);
 
   // 自建 LiveKit 不支持服务端 moveParticipant 时，后端经 Presence 下发
   // force_move_channel；这里复用与 RoomEvent.Moved 完全相同的
