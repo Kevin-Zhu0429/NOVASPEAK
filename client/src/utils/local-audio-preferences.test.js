@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   LOCAL_AUDIO_PREFS_STORAGE_KEY,
+  applyRemoteAudioPlaybackPreference,
   clampMemberVolume,
   getAudioElementPatch,
   getDefaultMemberVolume,
@@ -29,9 +30,9 @@ test("默认音量为 100", () => {
   assert.equal(normalizeMemberAudioPref(null).volume, 100);
 });
 
-test("音乐机器人未设置本地偏好时默认音量为 50%，显式设置仍被保留", () => {
-  assert.equal(getDefaultMemberVolume("music-bot:cs2"), 50);
-  assert.equal(getMemberAudioPref({}, "music-bot:cs2").volume, 50);
+test("音乐机器人未设置本地偏好时默认音量为 10%，显式设置仍被保留", () => {
+  assert.equal(getDefaultMemberVolume("music-bot:cs2"), 10);
+  assert.equal(getMemberAudioPref({}, "music-bot:cs2").volume, 10);
   assert.equal(getMemberAudioPref({ "music-bot:cs2": { volume: 80 } }, "music-bot:cs2").volume, 80);
   assert.equal(getMemberAudioPref({}, "ordinary-member").volume, 100);
 });
@@ -157,4 +158,48 @@ test("不支持 Web Audio 时仍安全降级到 audio 元素 100% 上限", () =>
     getRemoteAudioPlaybackPlan({ volume: 200, webAudioEnabled: false }),
     { elementMuted: false, elementVolume: 1, trackVolume: null }
   );
+});
+
+test("音乐机器人音轨重新创建后会再次应用保存的 10% 增益", () => {
+  const firstVolumes = [];
+  const secondVolumes = [];
+  const firstElement = {};
+  const secondElement = {};
+
+  const first = applyRemoteAudioPlaybackPreference({
+    track: { setVolume: (value) => firstVolumes.push(value) },
+    element: firstElement,
+    volume: 10,
+    webAudioEnabled: true,
+  });
+  const second = applyRemoteAudioPlaybackPreference({
+    track: { setVolume: (value) => secondVolumes.push(value) },
+    element: secondElement,
+    volume: 10,
+    webAudioEnabled: true,
+  });
+
+  assert.deepEqual(firstVolumes, [0.1]);
+  assert.deepEqual(secondVolumes, [0.1]);
+  assert.deepEqual(first, {
+    webAudioEnabled: true,
+    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.1 },
+  });
+  assert.deepEqual(second, first);
+  assert.deepEqual(firstElement, { muted: true, volume: 1 });
+  assert.deepEqual(secondElement, { muted: true, volume: 1 });
+});
+
+test("音轨增益暂不可用时回退 audio 元素并保持相同偏好", () => {
+  const element = {};
+  const result = applyRemoteAudioPlaybackPreference({
+    track: { setVolume: () => { throw new Error("audio context not ready"); } },
+    element,
+    volume: 10,
+    webAudioEnabled: true,
+  });
+
+  assert.equal(result.webAudioEnabled, false);
+  assert.deepEqual(result.plan, { elementMuted: false, elementVolume: 0.1, trackVolume: null });
+  assert.deepEqual(element, { muted: false, volume: 0.1 });
 });

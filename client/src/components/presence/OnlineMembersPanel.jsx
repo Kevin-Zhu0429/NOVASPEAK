@@ -1,5 +1,6 @@
 import { useState } from "react";
 import OnlineMemberCard from "./OnlineMemberCard";
+import useTransientMessage from "../../hooks/useTransientMessage";
 import { kickOnlineMember, moveOnlineMember } from "../../utils/presence-management-api";
 
 const STATUS_TEXT = {
@@ -12,7 +13,7 @@ const STATUS_TEXT = {
 
 export default function OnlineMembersPanel({ members, connectionStatus, embedded = false, currentUser, channels = [], apiBase = "" }) {
   const [busyPresenceId, setBusyPresenceId] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useTransientMessage();
   const [error, setError] = useState("");
 
   const run = async (member, operation) => {

@@ -8,12 +8,15 @@ import ChannelManagementPanel from "./components/channels/ChannelManagementPanel
 import WelcomeOverlay from "./components/auth/WelcomeOverlay";
 import VoiceRoom from "./components/voice/VoiceRoom";
 import OnlineMembersPanel from "./components/presence/OnlineMembersPanel";
+import ReleaseNotesDialog from "./components/common/ReleaseNotesDialog";
 import UserAvatar from "./components/common/UserAvatar";
 import usePresence from "./hooks/usePresence";
+import useTransientMessage from "./hooks/useTransientMessage";
 import useVoiceAnnouncements from "./hooks/useVoiceAnnouncements";
 import { getPositionText } from "./utils/user-display";
 import { findSystemLobby, normalizeUserMessage, sortChannels } from "./utils/channel-settings";
 import { getForceLogoutPlan, getForceMovePlan } from "./utils/voice-room-events";
+import { WEB_APP_VERSION } from "./release-notes";
 import "./App.css";
 
 
@@ -34,8 +37,9 @@ export default function App() {
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [showTeamMembers, setShowTeamMembers] = useState(false);
   const [showChannelManagement, setShowChannelManagement] = useState(false);
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   const [teamMembersRevision, setTeamMembersRevision] = useState(0);
-  const [voiceNotice, setVoiceNotice] = useState("");
+  const [voiceNotice, setVoiceNotice] = useTransientMessage();
   const channelRequestIdRef = useRef(0);
   const lastChannelFetchErrorRef = useRef("");
   const lobbyAutoJoinUserRef = useRef("");
@@ -218,7 +222,7 @@ export default function App() {
       const safeMessage = normalizeUserMessage(message);
       if (safeMessage) setVoiceNotice(safeMessage);
     }
-  }, [channels, presence]);
+  }, [channels, presence, setVoiceNotice]);
 
   // 自建 LiveKit 不支持服务端 moveParticipant 时，后端经 Presence 下发
   // force_move_channel；这里复用与 RoomEvent.Moved 完全相同的
@@ -288,23 +292,27 @@ export default function App() {
 
   if (authLoading) {
   return (
-    <div className="nova-auth-loading">
-      <div className="auth-loading-logo">
-        N
+    <>
+      <div className="nova-auth-loading">
+        <div className="auth-loading-logo">
+          N
+        </div>
+
+        <h1>NOVA SPEAK</h1>
+
+        <p>正在验证登录状态...</p>
       </div>
-
-      <h1>NOVA SPEAK</h1>
-
-      <p>正在验证登录状态...</p>
-    </div>
+      <div className="app-version-badge">v{WEB_APP_VERSION}</div>
+    </>
   );
 }
 
 if (!currentUser) {
   return (
-    <LoginScreen
-      onLogin={handleLogin}
-    />
+    <>
+      <LoginScreen onLogin={handleLogin} />
+      <div className="app-version-badge">v{WEB_APP_VERSION}</div>
+    </>
   );
 }
 
@@ -320,11 +328,15 @@ if (!currentUser) {
         <aside className="sidebar">
           <div className="sidebar-main">
             <div className="brand">
-              <h2>NovaSpeak</h2>
-
-              <span>
-                NOVA GAMING TEAMSPEAK
-              </span>
+              <div className="brand-heading-row">
+                <div>
+                  <h2>NovaSpeak</h2>
+                  <span>NOVA GAMING TEAMSPEAK</span>
+                </div>
+                <button type="button" className="release-notes-button" onClick={() => setShowReleaseNotes(true)}>
+                  更新日志
+                </button>
+              </div>
             </div>
 
             <ChannelList
@@ -440,6 +452,12 @@ if (!currentUser) {
           )}
         </main>
       </div>
+
+      <div className="app-version-badge">v{WEB_APP_VERSION}</div>
+
+      {showReleaseNotes && (
+        <ReleaseNotesDialog onClose={() => setShowReleaseNotes(false)} />
+      )}
 
        {welcomeUser && (
         <WelcomeOverlay

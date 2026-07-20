@@ -1,6 +1,6 @@
 export const LOCAL_AUDIO_PREFS_STORAGE_KEY = "novaVoiceLocalAudioPrefs:v1";
 export const DEFAULT_MEMBER_VOLUME = 100;
-export const DEFAULT_MUSIC_BOT_VOLUME = 50;
+export const DEFAULT_MUSIC_BOT_VOLUME = 10;
 export const MIN_MEMBER_VOLUME = 0;
 export const MAX_MEMBER_VOLUME = 200;
 
@@ -127,4 +127,45 @@ export function getRemoteAudioPlaybackPlan({
     elementVolume: fallback.volume,
     trackVolume: null,
   };
+}
+
+// 把同一份本地偏好同时应用到 LiveKit RemoteAudioTrack 与回退 audio 元素。
+// 返回本次是否实际启用了 Web Audio，供调用方在音轨重新创建或播放恢复后
+// 重新探测并再次应用，避免滑块显示旧值但新音轨仍使用默认增益。
+export function applyRemoteAudioPlaybackPreference({
+  track,
+  element,
+  deafened = false,
+  localMuted = false,
+  volume = DEFAULT_MEMBER_VOLUME,
+  webAudioEnabled = false,
+} = {}) {
+  let activeWebAudio = webAudioEnabled === true && typeof track?.setVolume === "function";
+  let plan = getRemoteAudioPlaybackPlan({
+    deafened,
+    localMuted,
+    volume,
+    webAudioEnabled: activeWebAudio,
+  });
+
+  if (activeWebAudio) {
+    try {
+      track.setVolume(plan.trackVolume);
+    } catch {
+      activeWebAudio = false;
+      plan = getRemoteAudioPlaybackPlan({
+        deafened,
+        localMuted,
+        volume,
+        webAudioEnabled: false,
+      });
+    }
+  }
+
+  if (element) {
+    element.muted = plan.elementMuted;
+    element.volume = plan.elementVolume;
+  }
+
+  return { webAudioEnabled: activeWebAudio, plan };
 }
