@@ -165,9 +165,7 @@ export function getRemoteAudioPlaybackPlan({
   if (webAudioEnabled) {
     return {
       elementMuted: true,
-      // 正常情况下原始元素保持 muted，实际音量由 GainNode 控制；这里仍写入
-      // 同一安全音量，防止 Web Audio 重建期间原始元素意外恢复到 100%。
-      elementVolume: Math.min(1, effectiveVolume),
+      elementVolume: 1,
       trackVolume: effectiveVolume,
     };
   }
@@ -177,29 +175,6 @@ export function getRemoteAudioPlaybackPlan({
     elementVolume: fallback.volume,
     trackVolume: null,
   };
-}
-
-// track.attach() 内部会立即调用 play()，因此必须在 attach 前先把元素静音，
-// 不能等 GainNode 创建完成后再补音量。
-export function prepareRemoteAudioElement(element) {
-  if (!element) return false;
-  element.autoplay = true;
-  element.controls = false;
-  element.muted = true;
-  element.volume = 0;
-  return true;
-}
-
-// 音乐机器人固定走原生 audio 元素，避开 LiveKit 在快速切换房间时重建
-// GainNode 造成的原始路径/混音路径短暂重叠。普通成员仍保留 Web Audio 增强。
-export function disableRemoteTrackWebAudio(track) {
-  if (typeof track?.setAudioContext !== "function") return false;
-  try {
-    track.setAudioContext(undefined);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // RemoteParticipant 会把每种 Track.Source 的音量保存在 volumeMap 中，并在
@@ -236,13 +211,8 @@ export function applyRemoteAudioPlaybackPreference({
   localMuted = false,
   volume = DEFAULT_MEMBER_VOLUME,
   webAudioEnabled = false,
-  preferNativePlayback = false,
 } = {}) {
-  const nativePlaybackActive = preferNativePlayback === true
-    && disableRemoteTrackWebAudio(track);
-  let activeWebAudio = nativePlaybackActive !== true
-    && webAudioEnabled === true
-    && typeof track?.setVolume === "function";
+  let activeWebAudio = webAudioEnabled === true && typeof track?.setVolume === "function";
   let plan = getRemoteAudioPlaybackPlan({
     deafened,
     localMuted,
