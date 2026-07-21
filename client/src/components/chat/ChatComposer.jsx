@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, Image, Paperclip, X } from "lucide-react";
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -6,11 +6,22 @@ import {
   chatImageFilesFromClipboard,
   formatChatAttachmentSize,
 } from "../../utils/chat-attachments";
+import { shouldRestoreChatComposerFocus } from "../../utils/chat-scroll";
 
 export default function ChatComposer({ value, onChange, onSend, disabled = false, sending = false }) {
-  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const messageInputRef = useRef(null);
+  const previousSendingRef = useRef(sending);
   const [files, setFiles] = useState([]);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const previousSending = previousSendingRef.current;
+    previousSendingRef.current = sending;
+    if (shouldRestoreChatComposerFocus({ previousSending, sending, disabled })) {
+      messageInputRef.current?.focus();
+    }
+  }, [disabled, sending]);
 
   const addFiles = (incoming) => {
     const result = addChatAttachmentFiles(files, incoming);
@@ -47,9 +58,9 @@ export default function ChatComposer({ value, onChange, onSend, disabled = false
       )}
       {error && <div className="chat-composer-error">{error}</div>}
       <div className="message-input-row">
-        <input ref={inputRef} type="file" className="chat-file-input" accept={CHAT_ATTACHMENT_ACCEPT} multiple onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }} disabled={disabled || sending} />
-        <button type="button" className="chat-attach-button" onClick={() => inputRef.current?.click()} disabled={disabled || sending} title="发送图片或文件" aria-label="选择图片或文件"><Paperclip size={19} /></button>
-        <textarea value={value} maxLength={2000} rows={1} onChange={(event) => onChange(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder="输入消息，或直接粘贴图片" disabled={disabled || sending} />
+        <input ref={fileInputRef} type="file" className="chat-file-input" accept={CHAT_ATTACHMENT_ACCEPT} multiple onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }} disabled={disabled || sending} />
+        <button type="button" className="chat-attach-button" onClick={() => fileInputRef.current?.click()} disabled={disabled || sending} title="发送图片或文件" aria-label="选择图片或文件"><Paperclip size={19} /></button>
+        <textarea ref={messageInputRef} value={value} maxLength={2000} rows={1} onChange={(event) => onChange(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder="输入消息，或直接粘贴图片" disabled={disabled || sending} />
         <button type="button" className="chat-send-button" onClick={() => void send()} disabled={disabled || sending || (!value.trim() && files.length === 0)}>{sending ? "发送中" : "发送"}</button>
       </div>
     </div>

@@ -8,3 +8,11 @@ export function isNearChatBottom(
   if (!Number.isFinite(distance)) return true;
   return distance <= Math.max(0, Number(threshold) || 0);
 }
+
+export function shouldRestoreChatComposerFocus({
+  previousSending = false,
+  sending = false,
+  disabled = false,
+} = {}) {
+  return previousSending === true && sending !== true && disabled !== true;
+}
