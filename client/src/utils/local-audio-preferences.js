@@ -155,6 +155,11 @@ export function getAudioElementPatch({ deafened = false, localMuted = false, vol
 // LiveKit webAudioMix 会把远端音轨接入 Web Audio GainNode，允许真实超过
 // HTMLMediaElement 100% 上限。Web Audio 模式下原始 <audio> 必须保持 muted，
 // 实际听音音量交给 participant/track.setVolume（0 ～ 2）。不支持时安全降级。
+//
+// elementVolume 必须为 0：LiveKit 的 Room.startAudio()（本地麦克风
+// AudioStreamAcquired 后 SDK 自动触发）会把所有远端 audio 元素强制
+// muted=false，若元素 volume 不为 0，原生播放路径会以该音量与 GainNode
+// 路径同时出声，产生满音量叠音/梳状滤波电音。
 export function getRemoteAudioPlaybackPlan({
   deafened = false,
   localMuted = false,
@@ -165,7 +170,7 @@ export function getRemoteAudioPlaybackPlan({
   if (webAudioEnabled) {
     return {
       elementMuted: true,
-      elementVolume: 1,
+      elementVolume: 0,
       trackVolume: effectiveVolume,
     };
   }
@@ -193,6 +198,32 @@ export function applyRemoteParticipantVolumePreference({
       getEffectiveVolume({ deafened, localMuted, volume }),
       source
     );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// RemoteAudioTrack.setVolume 只调用 gain.setTargetAtTime(target, 0, 0.1)，
+// 而新建 GainNode 的初始增益是 1.0——低音量目标（如机器人 10%）在音轨
+// 挂载/重建后会有约半秒从 100% 指数衰减的高音量残留。这里在应用偏好后
+// 把增益立即钉到目标值；gainNode 是 SDK 内部字段，全程特性检测，
+// 不可用时静默回退到原有 setTargetAtTime 行为（不会更糟）。
+export function snapRemoteAudioTrackGain(track, volume) {
+  try {
+    const gain = track?.gainNode?.gain;
+    if (
+      !gain ||
+      typeof gain.cancelScheduledValues !== "function" ||
+      typeof gain.setValueAtTime !== "function" ||
+      !Number.isFinite(volume)
+    ) {
+      return false;
+    }
+    const currentTime = track?.audioContext?.currentTime;
+    const now = Number.isFinite(currentTime) ? currentTime : 0;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(volume, now);
     return true;
   } catch {
     return false;
@@ -233,6 +264,7 @@ export function applyRemoteAudioPlaybackPreference({
   if (activeWebAudio) {
     try {
       track.setVolume(plan.trackVolume);
+      snapRemoteAudioTrackGain(track, plan.trackVolume);
     } catch {
       activeWebAudio = false;
       plan = getRemoteAudioPlaybackPlan({

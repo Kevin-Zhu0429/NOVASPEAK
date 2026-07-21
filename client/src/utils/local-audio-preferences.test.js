@@ -16,7 +16,26 @@ import {
   normalizeMemberAudioPref,
   saveLocalAudioPrefs,
   setMemberAudioPref,
+  snapRemoteAudioTrackGain,
 } from "./local-audio-preferences.js";
+
+function createFakeWebAudioTrack({ initialGain = 1, currentTime = 12.5 } = {}) {
+  const events = [];
+  const gain = {
+    value: initialGain,
+    cancelScheduledValues: (at) => events.push({ type: "cancel", at }),
+    setValueAtTime: (value, at) => {
+      gain.value = value;
+      events.push({ type: "set", value, at });
+    },
+  };
+  const track = {
+    setVolume: (value) => events.push({ type: "setVolume", value }),
+    gainNode: { gain },
+    audioContext: { currentTime },
+  };
+  return { track, gain, events };
+}
 
 function createFakeStorage(initial = {}) {
   const data = new Map(Object.entries(initial));
@@ -166,8 +185,14 @@ test("设置变化后生成正确 audio patch", () => {
 test("Web Audio 模式下 200% 音量由 GainNode 真实放大两倍", () => {
   assert.deepEqual(
     getRemoteAudioPlaybackPlan({ volume: 200, webAudioEnabled: true }),
-    { elementMuted: true, elementVolume: 1, trackVolume: 2 }
+    { elementMuted: true, elementVolume: 0, trackVolume: 2 }
   );
+});
+
+test("Web Audio 模式下原生 audio 元素音量必须为 0，防止被 startAudio 解除静音后满音量叠音", () => {
+  assert.equal(getRemoteAudioPlaybackPlan({ volume: 10, webAudioEnabled: true }).elementVolume, 0);
+  assert.equal(getRemoteAudioPlaybackPlan({ volume: 100, webAudioEnabled: true }).elementVolume, 0);
+  assert.equal(getRemoteAudioPlaybackPlan({ volume: 10, webAudioEnabled: true }).elementMuted, true);
 });
 
 test("Web Audio 模式下本地静音与 Deafen 都把轨道增益设为 0", () => {
@@ -211,11 +236,11 @@ test("音乐机器人音轨重新创建后会再次应用保存的 10% 增益", 
   assert.deepEqual(secondVolumes, [0.1]);
   assert.deepEqual(first, {
     webAudioEnabled: true,
-    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.1 },
+    plan: { elementMuted: true, elementVolume: 0, trackVolume: 0.1 },
   });
   assert.deepEqual(second, first);
-  assert.deepEqual(firstElement, { muted: true, volume: 1 });
-  assert.deepEqual(secondElement, { muted: true, volume: 1 });
+  assert.deepEqual(firstElement, { muted: true, volume: 0 });
+  assert.deepEqual(secondElement, { muted: true, volume: 0 });
 });
 
 test("音乐机器人在音轨挂载前把 2% 音量写入 participant 的 source 映射", () => {
@@ -252,9 +277,9 @@ test("participant 音量映射与当前 track 会同时获得 2% 增益", () => 
   assert.deepEqual(trackVolumes, [0.02]);
   assert.deepEqual(result, {
     webAudioEnabled: true,
-    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.02 },
+    plan: { elementMuted: true, elementVolume: 0, trackVolume: 0.02 },
   });
-  assert.deepEqual(element, { muted: true, volume: 1 });
+  assert.deepEqual(element, { muted: true, volume: 0 });
 });
 
 test("participant 音量映射失败时仍回退到当前 track", () => {
@@ -270,6 +295,75 @@ test("participant 音量映射失败时仍回退到当前 track", () => {
 
   assert.deepEqual(trackVolumes, [0.02]);
   assert.equal(result.webAudioEnabled, true);
+});
+
+test("GainNode 重建后（默认增益 1.0）应用偏好会立即钉到目标音量，不产生高音量斜坡", () => {
+  const { track, gain, events } = createFakeWebAudioTrack({ initialGain: 1 });
+  const result = applyRemoteAudioPlaybackPreference({
+    track,
+    element: {},
+    volume: 10,
+    webAudioEnabled: true,
+  });
+  assert.equal(result.webAudioEnabled, true);
+  assert.equal(gain.value, 0.1);
+  // 先 setVolume（维护 SDK elementVolume 簿记），再取消排程并钉值
+  assert.deepEqual(events.map((event) => event.type), ["setVolume", "cancel", "set"]);
+  assert.deepEqual(events[2], { type: "set", value: 0.1, at: 12.5 });
+});
+
+test("本地静音/Deafen 时增益立即钉为 0（SDK 对 elementVolume=0 不会主动应用）", () => {
+  const { track, gain } = createFakeWebAudioTrack({ initialGain: 1 });
+  applyRemoteAudioPlaybackPreference({
+    track,
+    element: {},
+    volume: 150,
+    localMuted: true,
+    webAudioEnabled: true,
+  });
+  assert.equal(gain.value, 0);
+
+  const deafened = createFakeWebAudioTrack({ initialGain: 1 });
+  applyRemoteAudioPlaybackPreference({
+    track: deafened.track,
+    element: {},
+    volume: 150,
+    deafened: true,
+    webAudioEnabled: true,
+  });
+  assert.equal(deafened.gain.value, 0);
+});
+
+test("snapRemoteAudioTrackGain 在缺少 gainNode 或参数非法时安全返回 false", () => {
+  assert.equal(snapRemoteAudioTrackGain(null, 0.1), false);
+  assert.equal(snapRemoteAudioTrackGain({}, 0.1), false);
+  assert.equal(snapRemoteAudioTrackGain({ gainNode: {} }, 0.1), false);
+  const { track } = createFakeWebAudioTrack();
+  assert.equal(snapRemoteAudioTrackGain(track, NaN), false);
+  assert.equal(snapRemoteAudioTrackGain(track, 0.1), true);
+});
+
+test("snapRemoteAudioTrackGain 在 audioContext 缺失时使用时间 0 仍可钉值", () => {
+  const { track, gain, events } = createFakeWebAudioTrack();
+  delete track.audioContext;
+  assert.equal(snapRemoteAudioTrackGain(track, 0.2), true);
+  assert.equal(gain.value, 0.2);
+  assert.deepEqual(events, [
+    { type: "cancel", at: 0 },
+    { type: "set", value: 0.2, at: 0 },
+  ]);
+});
+
+test("snapRemoteAudioTrackGain 内部抛错时不影响调用方", () => {
+  const track = {
+    gainNode: {
+      gain: {
+        cancelScheduledValues: () => { throw new Error("audio param dead"); },
+        setValueAtTime: () => {},
+      },
+    },
+  };
+  assert.equal(snapRemoteAudioTrackGain(track, 0.1), false);
 });
 
 test("音轨增益暂不可用时回退 audio 元素并保持相同偏好", () => {
