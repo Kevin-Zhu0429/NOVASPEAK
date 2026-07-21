@@ -14,7 +14,12 @@ import useMicrophoneConstraints from "../../hooks/useMicrophoneConstraints";
 import useTransientMessage from "../../hooks/useTransientMessage";
 import useVoiceGate from "../../hooks/useVoiceGate";
 import useVoiceNetworkStats from "../../hooks/useVoiceNetworkStats";
-import { applyRemoteAudioPlaybackPreference, getMemberAudioKey, getMemberAudioPref } from "../../utils/local-audio-preferences";
+import {
+  applyRemoteAudioPlaybackPreference,
+  applyRemoteParticipantVolumePreference,
+  getMemberAudioKey,
+  getMemberAudioPref,
+} from "../../utils/local-audio-preferences";
 import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
@@ -279,6 +284,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(entry.participantIdentity));
       const result = applyRemoteAudioPlaybackPreference({
         track: entry.track,
+        participant: entry.participant,
+        source: entry.source,
         element: entry.element,
         deafened: deafenRef.current,
         localMuted: pref.muted,
@@ -322,12 +329,30 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
     const sync = (options = {}) => valid() && syncParticipants(activeRoom, options);
     const attachAudio = (track, publication, participant) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
+      const participantIdentity = participant?.identity || "";
+      const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(participantIdentity));
+      // 先写 RemoteParticipant.volumeMap，再 attach。这样 LiveKit 创建/替换
+      // GainNode 时会直接继承保存值，不会先以 100% 播放到用户手动拖滑块。
+      applyRemoteParticipantVolumePreference({
+        participant,
+        source: publication.source,
+        deafened: deafenRef.current,
+        localMuted: pref.muted,
+        volume: pref.volume,
+      });
       const element = track.attach();
       element.autoplay = true;
       element.controls = false;
       element.className = "voice-remote-audio";
-      const participantIdentity = participant?.identity || "";
-      const entry = { track, element, participantIdentity, room: activeRoom, webAudioEnabled: false };
+      const entry = {
+        track,
+        participant,
+        source: publication.source,
+        element,
+        participantIdentity,
+        room: activeRoom,
+        webAudioEnabled: false,
+      };
       audioElements.current.set(publication.trackSid, entry);
       applyLocalAudioPrefs();
       document.body.appendChild(element);

@@ -154,7 +154,7 @@ export function getAudioElementPatch({ deafened = false, localMuted = false, vol
 
 // LiveKit webAudioMix 会把远端音轨接入 Web Audio GainNode，允许真实超过
 // HTMLMediaElement 100% 上限。Web Audio 模式下原始 <audio> 必须保持 muted，
-// 实际听音音量全部交给 track.setVolume（0 ～ 2）。不支持 Web Audio 时安全降级。
+// 实际听音音量交给 participant/track.setVolume（0 ～ 2）。不支持时安全降级。
 export function getRemoteAudioPlaybackPlan({
   deafened = false,
   localMuted = false,
@@ -177,11 +177,35 @@ export function getRemoteAudioPlaybackPlan({
   };
 }
 
+// RemoteParticipant 会把每种 Track.Source 的音量保存在 volumeMap 中，并在
+// LiveKit 因重连/切换频道而替换 RemoteAudioTrack 时自动应用到新音轨。
+// 必须在 track.attach() 前写入，避免新 GainNode 先以默认 100% 开始播放。
+export function applyRemoteParticipantVolumePreference({
+  participant,
+  source,
+  deafened = false,
+  localMuted = false,
+  volume = DEFAULT_MEMBER_VOLUME,
+} = {}) {
+  if (typeof participant?.setVolume !== "function") return false;
+  try {
+    participant.setVolume(
+      getEffectiveVolume({ deafened, localMuted, volume }),
+      source
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 把同一份本地偏好同时应用到 LiveKit RemoteAudioTrack 与回退 audio 元素。
 // 返回本次是否实际启用了 Web Audio，供调用方在音轨重新创建或播放恢复后
 // 重新探测并再次应用，避免滑块显示旧值但新音轨仍使用默认增益。
 export function applyRemoteAudioPlaybackPreference({
   track,
+  participant,
+  source,
   element,
   deafened = false,
   localMuted = false,
@@ -196,6 +220,16 @@ export function applyRemoteAudioPlaybackPreference({
     webAudioEnabled: activeWebAudio,
   });
 
+  applyRemoteParticipantVolumePreference({
+    participant,
+    source,
+    deafened,
+    localMuted,
+    volume,
+  });
+
+  // participant.setVolume 负责让后续替换音轨继承偏好；这里仍直接确认当前
+  // track，避免 SDK 尚未把 publication/source 关联完成时漏掉正在播放的音轨。
   if (activeWebAudio) {
     try {
       track.setVolume(plan.trackVolume);

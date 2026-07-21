@@ -4,6 +4,7 @@ import {
   LOCAL_AUDIO_PREFS_STORAGE_KEY,
   MUSIC_BOT_AUDIO_KEY,
   applyRemoteAudioPlaybackPreference,
+  applyRemoteParticipantVolumePreference,
   clampMemberVolume,
   getAudioElementPatch,
   getDefaultMemberVolume,
@@ -215,6 +216,60 @@ test("音乐机器人音轨重新创建后会再次应用保存的 10% 增益", 
   assert.deepEqual(second, first);
   assert.deepEqual(firstElement, { muted: true, volume: 1 });
   assert.deepEqual(secondElement, { muted: true, volume: 1 });
+});
+
+test("音乐机器人在音轨挂载前把 2% 音量写入 participant 的 source 映射", () => {
+  const calls = [];
+  const participant = {
+    setVolume: (volume, source) => calls.push({ volume, source }),
+  };
+
+  const applied = applyRemoteParticipantVolumePreference({
+    participant,
+    source: "microphone",
+    volume: 2,
+  });
+
+  assert.equal(applied, true);
+  assert.deepEqual(calls, [{ volume: 0.02, source: "microphone" }]);
+});
+
+test("participant 音量映射与当前 track 会同时获得 2% 增益", () => {
+  const participantVolumes = [];
+  const trackVolumes = [];
+  const element = {};
+
+  const result = applyRemoteAudioPlaybackPreference({
+    participant: { setVolume: (volume, source) => participantVolumes.push({ volume, source }) },
+    source: "microphone",
+    track: { setVolume: (volume) => trackVolumes.push(volume) },
+    element,
+    volume: 2,
+    webAudioEnabled: true,
+  });
+
+  assert.deepEqual(participantVolumes, [{ volume: 0.02, source: "microphone" }]);
+  assert.deepEqual(trackVolumes, [0.02]);
+  assert.deepEqual(result, {
+    webAudioEnabled: true,
+    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.02 },
+  });
+  assert.deepEqual(element, { muted: true, volume: 1 });
+});
+
+test("participant 音量映射失败时仍回退到当前 track", () => {
+  const trackVolumes = [];
+  const result = applyRemoteAudioPlaybackPreference({
+    participant: { setVolume: () => { throw new Error("participant not ready"); } },
+    source: "microphone",
+    track: { setVolume: (volume) => trackVolumes.push(volume) },
+    element: {},
+    volume: 2,
+    webAudioEnabled: true,
+  });
+
+  assert.deepEqual(trackVolumes, [0.02]);
+  assert.equal(result.webAudioEnabled, true);
 });
 
 test("音轨增益暂不可用时回退 audio 元素并保持相同偏好", () => {
