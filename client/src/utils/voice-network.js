@@ -34,8 +34,32 @@ export function readRtt(remoteInbound) {
     : null;
 }
 
+// 判断相邻两次 stats 是否属于同一条 RTP 流：report id 或 SSRC 任一变化
+// （音轨重发布、重协商、重连）都说明累计计数已重置，不能再做 delta。
+export function isSameRtpStream(current, previous) {
+  if (!current || !previous) return false;
+  if (current.id && previous.id && current.id !== previous.id) return false;
+  const currentSsrc = Number(current.ssrc);
+  const previousSsrc = Number(previous.ssrc);
+  if (Number.isFinite(currentSsrc) && Number.isFinite(previousSsrc) && currentSsrc !== previousSsrc) {
+    return false;
+  }
+  return true;
+}
+
+// 连续多少次 poll 无有效上行样本后，不再保留旧的丢包显示值。
+// 静音麦克风、无 outbound 包或统计缺失时，旧的严重丢包不能一直挂在面板上。
+export const LOSS_MAX_STALE_POLLS = 3;
+
+export function nextLossValue(previousLoss, sample, stalePollCount) {
+  if (sample) return smoothMetric(previousLoss, sample.loss);
+  return stalePollCount >= LOSS_MAX_STALE_POLLS ? null : previousLoss ?? null;
+}
+
 export function outboundLossSample(currentOutbound, previousOutbound, currentRemote, previousRemote) {
   if (!currentOutbound || !previousOutbound || !currentRemote || !previousRemote) return null;
+  if (!isSameRtpStream(currentOutbound, previousOutbound)) return null;
+  if (!isSameRtpStream(currentRemote, previousRemote)) return null;
   const sent = Number(currentOutbound.packetsSent);
   const previousSent = Number(previousOutbound.packetsSent);
   const lost = Number(currentRemote.packetsLost);
@@ -58,6 +82,7 @@ export function findInboundAudio(report) {
 
 export function calculateLossSample(current, previous, packetField) {
   if (!current || !previous) return null;
+  if (!isSameRtpStream(current, previous)) return null;
   if (current.packetsLost == null || previous.packetsLost == null) return null;
   const packets = Number(current[packetField]);
   const lost = Number(current.packetsLost);

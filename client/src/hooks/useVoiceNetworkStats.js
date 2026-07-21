@@ -6,6 +6,7 @@ import {
   findOutboundAudio,
   findRemoteInboundAudio,
   NETWORK_POLL_INTERVAL_MS,
+  nextLossValue,
   outboundLossSample,
   readRtt,
   reportValues,
@@ -25,13 +26,13 @@ const EMPTY_STATS = {
 
 export default function useVoiceNetworkStats(room, active, baselineVersion) {
   const [stats, setStats] = useState(EMPTY_STATS);
-  const baselines = useRef({ localTrack: null, outbound: null, remoteInbound: null, inbound: new Map() });
+  const baselines = useRef({ localTrack: null, outbound: null, remoteInbound: null, inbound: new Map(), outboundStalePolls: 0, inboundStalePolls: 0 });
   const running = useRef(false);
   const generation = useRef(0);
   const debuggedReports = useRef(new Set());
 
   const reset = useCallback(() => {
-    baselines.current = { localTrack: null, outbound: null, remoteInbound: null, inbound: new Map() };
+    baselines.current = { localTrack: null, outbound: null, remoteInbound: null, inbound: new Map(), outboundStalePolls: 0, inboundStalePolls: 0 };
     setStats(EMPTY_STATS);
   }, []);
 
@@ -42,6 +43,13 @@ export default function useVoiceNetworkStats(room, active, baselineVersion) {
     const currentGeneration = ++generation.current;
     let timer;
     let stopped = false;
+    // Room 更换（快速切换频道）后，旧 Room 的丢包/RTT 不得显示在新 Room
+    // 上；基线同步清空让首个 poll 只做 baseline，显示值在微任务中回空，
+    // 并带 generation 守卫防止旧效果的延迟重置覆盖新效果状态。
+    baselines.current = { localTrack: null, outbound: null, remoteInbound: null, inbound: new Map(), outboundStalePolls: 0, inboundStalePolls: 0 };
+    queueMicrotask(() => {
+      if (!stopped && generation.current === currentGeneration) setStats(EMPTY_STATS);
+    });
 
     const debugReportOnce = (key, report, reason) => {
       if (!DEBUG_VOICE_STATS || debuggedReports.current.has(key)) return;
@@ -114,6 +122,8 @@ export default function useVoiceNetworkStats(room, active, baselineVersion) {
         }
         for (const key of baselines.current.inbound.keys()) if (!liveTrackIds.has(key)) baselines.current.inbound.delete(key);
         const inboundLoss = weightedLoss(inboundSamples);
+        baselines.current.outboundStalePolls = outboundSample ? 0 : baselines.current.outboundStalePolls + 1;
+        baselines.current.inboundStalePolls = inboundLoss == null ? baselines.current.inboundStalePolls + 1 : 0;
         const localStatus = !localTrack
           ? "waiting-local-track"
           : !outbound
@@ -129,8 +139,12 @@ export default function useVoiceNetworkStats(room, active, baselineVersion) {
         if (!stopped && generation.current === currentGeneration) {
           setStats((previous) => ({
             rtt: smoothMetric(previous.rtt, rtt),
-            outboundLoss: outboundSample ? smoothMetric(previous.outboundLoss, outboundSample.loss) : previous.outboundLoss,
-            inboundLoss: inboundLoss == null ? (liveTrackIds.size ? previous.inboundLoss : null) : smoothMetric(previous.inboundLoss, inboundLoss),
+            // 无新样本时最多保留 LOSS_MAX_STALE_POLLS 个周期，之后回到 "--"，
+            // 避免静音麦克风 / 统计缺失时旧的严重丢包一直挂在面板上。
+            outboundLoss: nextLossValue(previous.outboundLoss, outboundSample, baselines.current.outboundStalePolls),
+            inboundLoss: liveTrackIds.size === 0
+              ? null
+              : nextLossValue(previous.inboundLoss, inboundLoss == null ? null : { loss: inboundLoss }, baselines.current.inboundStalePolls),
             participantLoss,
             localStatus,
             inboundStatus,
@@ -146,7 +160,7 @@ export default function useVoiceNetworkStats(room, active, baselineVersion) {
     poll();
     timer = window.setInterval(poll, NETWORK_POLL_INTERVAL_MS);
     const resetForTrackChange = () => {
-      baselines.current = { localTrack: null, outbound: null, remoteInbound: null, inbound: new Map() };
+      baselines.current = { localTrack: null, outbound: null, remoteInbound: null, inbound: new Map(), outboundStalePolls: 0, inboundStalePolls: 0 };
       if (!stopped) setStats(EMPTY_STATS);
     };
     room.on(RoomEvent.LocalTrackPublished, resetForTrackChange);
