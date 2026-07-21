@@ -1,8 +1,18 @@
-export const WEB_APP_VERSION = "3.0.2";
+export const WEB_APP_VERSION = "3.0.3";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
 // 桌面端大版本才标记 requiresDesktopUpdate: true 并通过 OTA 发布。
 export const RELEASE_NOTES = Object.freeze([
+  Object.freeze({
+    version: "3.0.3",
+    title: "频道切换与聊天修复",
+    releasedAt: "2026-07-21",
+    requiresDesktopUpdate: false,
+    changes: Object.freeze([
+      "修复切换频道后音乐机器人恢复较大音量的问题，所有频道共用同一份本地机器人音量",
+      "修复发送消息后需要再次点击输入框才能继续输入的问题",
+    ]),
+  }),
   Object.freeze({
     version: "3.0.2",
     title: "音乐音量优化",

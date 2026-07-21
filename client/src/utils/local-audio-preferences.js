@@ -1,6 +1,7 @@
 export const LOCAL_AUDIO_PREFS_STORAGE_KEY = "novaVoiceLocalAudioPrefs:v1";
 export const DEFAULT_MEMBER_VOLUME = 100;
 export const DEFAULT_MUSIC_BOT_VOLUME = 10;
+export const MUSIC_BOT_AUDIO_KEY = "music-bot:global";
 export const MIN_MEMBER_VOLUME = 0;
 export const MAX_MEMBER_VOLUME = 200;
 
@@ -27,6 +28,23 @@ export function isMusicBotAudioKey(memberKey) {
   return typeof memberKey === "string" && memberKey.startsWith("music-bot:");
 }
 
+function getAudioPreferenceStorageKey(memberKey) {
+  if (typeof memberKey !== "string") return "";
+  const trimmed = memberKey.trim();
+  if (!trimmed) return "";
+  return isMusicBotAudioKey(trimmed) ? MUSIC_BOT_AUDIO_KEY : trimmed;
+}
+
+// 旧版本按频道保存 music-bot:<channelId>。升级时合并成一个全局机器人偏好；
+// 多个旧值冲突时保留更安静的音量和静音状态，避免切换频道突然变响。
+function mergeMusicBotAudioPref(current, incoming) {
+  if (!current) return incoming;
+  return {
+    volume: Math.min(current.volume, incoming.volume),
+    muted: current.muted || incoming.muted,
+  };
+}
+
 export function getDefaultMemberVolume(memberKey) {
   return isMusicBotAudioKey(memberKey)
     ? DEFAULT_MUSIC_BOT_VOLUME
@@ -40,6 +58,7 @@ export function getMemberAudioKey(itemOrIdentity) {
   if (typeof identity !== "string") return "";
   const trimmed = identity.trim();
   if (!trimmed) return "";
+  if (isMusicBotAudioKey(trimmed)) return MUSIC_BOT_AUDIO_KEY;
   const marker = trimmed.indexOf(":voice:");
   return marker > 0 ? trimmed.slice(0, marker) : trimmed;
 }
@@ -52,7 +71,12 @@ export function loadLocalAudioPrefs(storage = defaultStorage()) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const prefs = {};
     for (const [key, value] of Object.entries(parsed)) {
-      if (typeof key === "string" && key) prefs[key] = normalizeMemberAudioPref(value);
+      const storageKey = getAudioPreferenceStorageKey(key);
+      if (!storageKey) continue;
+      const pref = normalizeMemberAudioPref(value);
+      prefs[storageKey] = storageKey === MUSIC_BOT_AUDIO_KEY
+        ? mergeMusicBotAudioPref(prefs[storageKey], pref)
+        : pref;
     }
     return prefs;
   } catch {
@@ -65,7 +89,12 @@ export function saveLocalAudioPrefs(prefs, storage = defaultStorage()) {
     const source = prefs && typeof prefs === "object" && !Array.isArray(prefs) ? prefs : {};
     const safe = {};
     for (const [key, value] of Object.entries(source)) {
-      if (typeof key === "string" && key) safe[key] = normalizeMemberAudioPref(value);
+      const storageKey = getAudioPreferenceStorageKey(key);
+      if (!storageKey) continue;
+      const pref = normalizeMemberAudioPref(value);
+      safe[storageKey] = storageKey === MUSIC_BOT_AUDIO_KEY
+        ? mergeMusicBotAudioPref(safe[storageKey], pref)
+        : pref;
     }
     storage?.setItem?.(LOCAL_AUDIO_PREFS_STORAGE_KEY, JSON.stringify(safe));
     return true;
@@ -76,17 +105,36 @@ export function saveLocalAudioPrefs(prefs, storage = defaultStorage()) {
 
 export function getMemberAudioPref(prefs, memberKey) {
   const fallback = { volume: getDefaultMemberVolume(memberKey), muted: false };
-  if (!memberKey || !prefs || typeof prefs !== "object") return fallback;
-  if (!Object.prototype.hasOwnProperty.call(prefs, memberKey)) return fallback;
-  return normalizeMemberAudioPref(prefs[memberKey]);
+  const storageKey = getAudioPreferenceStorageKey(memberKey);
+  if (!storageKey || !prefs || typeof prefs !== "object") return fallback;
+  if (Object.prototype.hasOwnProperty.call(prefs, storageKey)) {
+    return normalizeMemberAudioPref(prefs[storageKey]);
+  }
+  if (storageKey === MUSIC_BOT_AUDIO_KEY) {
+    let migrated = null;
+    for (const [key, value] of Object.entries(prefs)) {
+      if (isMusicBotAudioKey(key)) {
+        migrated = mergeMusicBotAudioPref(migrated, normalizeMemberAudioPref(value));
+      }
+    }
+    if (migrated) return migrated;
+  }
+  return fallback;
 }
 
 export function setMemberAudioPref(prefs, memberKey, patch) {
   const base = prefs && typeof prefs === "object" && !Array.isArray(prefs) ? prefs : {};
-  if (!memberKey || typeof memberKey !== "string") return base;
-  const current = getMemberAudioPref(base, memberKey);
+  const storageKey = getAudioPreferenceStorageKey(memberKey);
+  if (!storageKey) return base;
+  const current = getMemberAudioPref(base, storageKey);
   const source = patch && typeof patch === "object" ? patch : {};
-  return { ...base, [memberKey]: normalizeMemberAudioPref({ ...current, ...source }) };
+  const next = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (storageKey === MUSIC_BOT_AUDIO_KEY && isMusicBotAudioKey(key)) continue;
+    next[key] = value;
+  }
+  next[storageKey] = normalizeMemberAudioPref({ ...current, ...source });
+  return next;
 }
 
 // 有效音量（倍率）：Deafen 或本地静音 → 0，否则 volume / 100（0 ～ 2）。
