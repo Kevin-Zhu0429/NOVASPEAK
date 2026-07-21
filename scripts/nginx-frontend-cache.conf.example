@@ -1,0 +1,36 @@
+# NovaSpeak 前端缓存策略示例（voice.novagaming.top server 块内片段）。
+#
+# 目标：
+#   - index.html 永不长缓存：客户端（含 Electron）每次都会验证新版本，
+#     不会长时间拿着引用已删除哈希资源的旧 index 黑屏；
+#   - /assets/ 哈希文件内容不可变：长期 immutable 缓存；
+#   - 前端 root 指向 releases/current 符号链接，由
+#     scripts/deploy-frontend.sh 原子切换。
+#
+# 应用步骤（一次性迁移）：
+#   1. 首次运行 scripts/deploy-frontend.sh 生成 /opt/novaspeak-web/releases/current；
+#   2. 把本片段合入现有 server 块（替换原来指向 client/dist 的 root/location）；
+#   3. sudo nginx -t && sudo systemctl reload nginx；
+#   4. 验证 GET / 与 /assets/ 均正常后，才可停用旧 dist 目录。
+#
+# 注意：/api/、/ws、/uploads、desktop-updates 等既有反向代理配置保持不变。
+
+root /opt/novaspeak-web/releases/current;
+
+# index.html 与 SPA 入口：禁止缓存旧入口
+location = /index.html {
+    add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    add_header Pragma "no-cache" always;
+}
+
+# 带内容哈希的构建资源：内容不可变，长期缓存
+location /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    try_files $uri =404;
+}
+
+# SPA fallback（保持 /api 等前缀在此之前匹配）
+location / {
+    add_header Cache-Control "no-cache" always;
+    try_files $uri $uri/ /index.html;
+}
