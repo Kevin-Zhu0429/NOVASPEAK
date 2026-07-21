@@ -5,6 +5,7 @@ import { PassThrough, Readable } from "node:stream";
 import {
   DECODER_ERROR,
   FFMPEG_DECODE_ARGS,
+  MUSIC_BOT_SOURCE_GAIN,
   PCM_CHANNELS,
   PCM_FRAME_BYTES,
   PCM_FRAME_SAMPLES,
@@ -123,6 +124,11 @@ test("成功解码：参数安全 + 帧数正确", async () => {
   assert.equal(PCM_FRAME_VALUES, 960);
   assert.ok(call.args.includes("s16le"));
   assert.ok(call.args.includes("pipe:0"));
+  // 机器人源音轨固定衰减到 20%；客户端默认 10% 时最终约为原始 PCM 的 2%。
+  assert.equal(MUSIC_BOT_SOURCE_GAIN, 0.2);
+  const filterIndex = call.args.indexOf("-filter:a");
+  assert.ok(filterIndex > -1);
+  assert.equal(call.args[filterIndex + 1], "volume=0.2");
   // shell:false + 环境白名单（无密钥），URL/Cookie 不在 argv
   assert.equal(call.options.shell, false);
   assert.deepEqual(call.options.env, { HOME: "/home/x" });

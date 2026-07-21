@@ -3,7 +3,9 @@
 // 数据流：媒体 Readable → byte-limit Transform → FFmpeg stdin；
 // FFmpeg stdout（s16le PCM）→ 1920 字节分帧 → await onFrame(帧)。
 //
-// 输出固定：48000Hz / 双声道 / signed 16-bit LE / 10ms 帧
+// 输出固定：48000Hz / 双声道 / signed 16-bit LE / 10ms 帧；
+// 解码阶段统一将音乐机器人源音轨衰减到 20%，给客户端本地音量留出
+// 舒适且可继续调节的范围，不影响成员语音轨道。
 // （每声道 480 采样，共 960 个 Int16 = 1920 字节）。
 //
 // 安全：shell:false；URL 绝不进入 argv（媒体从 stdin 流入）；
@@ -42,6 +44,7 @@ export const PCM_CHANNELS = 2;
 export const PCM_FRAME_SAMPLES = 480;
 export const PCM_FRAME_VALUES = PCM_FRAME_SAMPLES * PCM_CHANNELS;
 export const PCM_FRAME_BYTES = PCM_FRAME_VALUES * 2; // 1920
+export const MUSIC_BOT_SOURCE_GAIN = 0.2;
 
 export const FFMPEG_DECODE_ARGS = Object.freeze([
   "-nostdin",
@@ -55,6 +58,8 @@ export const FFMPEG_DECODE_ARGS = Object.freeze([
   "-vn",
   "-sn",
   "-dn",
+  "-filter:a",
+  `volume=${MUSIC_BOT_SOURCE_GAIN}`,
   "-ac",
   String(PCM_CHANNELS),
   "-ar",
