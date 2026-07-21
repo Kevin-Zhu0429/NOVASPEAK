@@ -6,7 +6,6 @@ import {
   applyRemoteAudioPlaybackPreference,
   applyRemoteParticipantVolumePreference,
   clampMemberVolume,
-  disableRemoteTrackWebAudio,
   getAudioElementPatch,
   getDefaultMemberVolume,
   getEffectiveVolume,
@@ -15,7 +14,6 @@ import {
   getRemoteAudioPlaybackPlan,
   loadLocalAudioPrefs,
   normalizeMemberAudioPref,
-  prepareRemoteAudioElement,
   saveLocalAudioPrefs,
   setMemberAudioPref,
 } from "./local-audio-preferences.js";
@@ -172,26 +170,6 @@ test("Web Audio 模式下 200% 音量由 GainNode 真实放大两倍", () => {
   );
 });
 
-test("远端 audio 元素在 attach 前先静音，阻止默认 100% 抢先播放", () => {
-  const element = { autoplay: false, controls: true, muted: false, volume: 1 };
-  assert.equal(prepareRemoteAudioElement(element), true);
-  assert.deepEqual(element, {
-    autoplay: true,
-    controls: false,
-    muted: true,
-    volume: 0,
-  });
-});
-
-test("音乐机器人可断开 Web Audio 节点并使用原生元素", () => {
-  const contexts = [];
-  assert.equal(disableRemoteTrackWebAudio({
-    setAudioContext: (context) => contexts.push(context),
-  }), true);
-  assert.deepEqual(contexts, [undefined]);
-  assert.equal(disableRemoteTrackWebAudio({}), false);
-});
-
 test("Web Audio 模式下本地静音与 Deafen 都把轨道增益设为 0", () => {
   assert.equal(
     getRemoteAudioPlaybackPlan({ volume: 180, localMuted: true, webAudioEnabled: true }).trackVolume,
@@ -233,11 +211,11 @@ test("音乐机器人音轨重新创建后会再次应用保存的 10% 增益", 
   assert.deepEqual(secondVolumes, [0.1]);
   assert.deepEqual(first, {
     webAudioEnabled: true,
-    plan: { elementMuted: true, elementVolume: 0.1, trackVolume: 0.1 },
+    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.1 },
   });
   assert.deepEqual(second, first);
-  assert.deepEqual(firstElement, { muted: true, volume: 0.1 });
-  assert.deepEqual(secondElement, { muted: true, volume: 0.1 });
+  assert.deepEqual(firstElement, { muted: true, volume: 1 });
+  assert.deepEqual(secondElement, { muted: true, volume: 1 });
 });
 
 test("音乐机器人在音轨挂载前把 2% 音量写入 participant 的 source 映射", () => {
@@ -274,33 +252,9 @@ test("participant 音量映射与当前 track 会同时获得 2% 增益", () => 
   assert.deepEqual(trackVolumes, [0.02]);
   assert.deepEqual(result, {
     webAudioEnabled: true,
-    plan: { elementMuted: true, elementVolume: 0.02, trackVolume: 0.02 },
+    plan: { elementMuted: true, elementVolume: 1, trackVolume: 0.02 },
   });
-  assert.deepEqual(element, { muted: true, volume: 0.02 });
-});
-
-test("音乐机器人优先原生播放时禁用 GainNode 并直接应用 2% 元素音量", () => {
-  const contexts = [];
-  const trackVolumes = [];
-  const element = {};
-  const result = applyRemoteAudioPlaybackPreference({
-    track: {
-      setAudioContext: (context) => contexts.push(context),
-      setVolume: (volume) => trackVolumes.push(volume),
-    },
-    element,
-    volume: 2,
-    webAudioEnabled: true,
-    preferNativePlayback: true,
-  });
-
-  assert.deepEqual(contexts, [undefined]);
-  assert.deepEqual(trackVolumes, []);
-  assert.deepEqual(result, {
-    webAudioEnabled: false,
-    plan: { elementMuted: false, elementVolume: 0.02, trackVolume: null },
-  });
-  assert.deepEqual(element, { muted: false, volume: 0.02 });
+  assert.deepEqual(element, { muted: true, volume: 1 });
 });
 
 test("participant 音量映射失败时仍回退到当前 track", () => {
