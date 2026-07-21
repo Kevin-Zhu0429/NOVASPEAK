@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { RELEASE_NOTES, WEB_APP_VERSION } from "./release-notes.js";
 
 test("当前网页版本与第一条更新日志一致", () => {
-  assert.equal(WEB_APP_VERSION, "3.0.3");
+  assert.equal(WEB_APP_VERSION, "3.0.4");
   assert.equal(RELEASE_NOTES[0].version, WEB_APP_VERSION);
 });
 
