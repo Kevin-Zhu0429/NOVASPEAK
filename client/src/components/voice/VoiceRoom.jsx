@@ -19,6 +19,8 @@ import {
   applyRemoteParticipantVolumePreference,
   getMemberAudioKey,
   getMemberAudioPref,
+  isMusicBotAudioKey,
+  prepareRemoteAudioElement,
 } from "../../utils/local-audio-preferences";
 import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
@@ -277,8 +279,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
   const localAudioPrefsRef = useRef(localAudioPrefs);
 
   // 将 Deafen + 本地偏好应用到所有已存在的远端音频元素：
-  // Web Audio 模式用 RemoteAudioTrack GainNode 实现真实 0～200% 增益；
-  // 不支持 Web Audio 时才安全降级到 element.volume（clamp 到 1）。
+  // 普通成员用 RemoteAudioTrack GainNode 实现真实 0～200% 增益；
+  // 音乐机器人固定用独立原生元素，避免切换频道时重建 GainNode 产生双重播放。
   const applyLocalAudioPrefs = useCallback(() => {
     for (const entry of audioElements.current.values()) {
       const pref = getMemberAudioPref(localAudioPrefsRef.current, getMemberAudioKey(entry.participantIdentity));
@@ -290,6 +292,7 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         deafened: deafenRef.current,
         localMuted: pref.muted,
         volume: pref.volume,
+        preferNativePlayback: entry.preferNativePlayback,
         // AudioContext 可能在 TrackSubscribed 之后才准备好，每次都重新探测。
         webAudioEnabled: Boolean(entry.room?.audioContext),
       });
@@ -340,9 +343,11 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         localMuted: pref.muted,
         volume: pref.volume,
       });
-      const element = track.attach();
-      element.autoplay = true;
-      element.controls = false;
+      // LiveKit attach() 会在建立 GainNode 之前调用 play()；使用预先静音的
+      // 独立元素，避免复用旧元素或短暂以 100% 原始音量播放。
+      const element = document.createElement("audio");
+      prepareRemoteAudioElement(element);
+      track.attach(element);
       element.className = "voice-remote-audio";
       const entry = {
         track,
@@ -351,6 +356,8 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
         element,
         participantIdentity,
         room: activeRoom,
+        // 机器人不需要成员语音的 200% 增强，固定走稳定的原生元素路径。
+        preferNativePlayback: isMusicBotAudioKey(participantIdentity),
         webAudioEnabled: false,
       };
       audioElements.current.set(publication.trackSid, entry);

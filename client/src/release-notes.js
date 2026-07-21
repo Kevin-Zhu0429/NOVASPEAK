@@ -1,8 +1,18 @@
-export const WEB_APP_VERSION = "3.0.4";
+export const WEB_APP_VERSION = "3.0.5";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
 // 桌面端大版本才标记 requiresDesktopUpdate: true 并通过 OTA 发布。
 export const RELEASE_NOTES = Object.freeze([
+  Object.freeze({
+    version: "3.0.5",
+    title: "音乐机器人音频链修复",
+    releasedAt: "2026-07-21",
+    requiresDesktopUpdate: false,
+    changes: Object.freeze([
+      "音乐机器人改用独立原生音频路径，避免快速切换频道时出现重复混音和电音",
+      "音频元素在播放前先应用安全音量，防止切换时短暂恢复到 100%",
+    ]),
+  }),
   Object.freeze({
     version: "3.0.4",
     title: "快速切换频道音量修复",
