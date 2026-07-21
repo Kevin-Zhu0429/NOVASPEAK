@@ -21,6 +21,7 @@ import {
   getMemberAudioPref,
 } from "../../utils/local-audio-preferences";
 import { getAudioCaptureDefaults, loadMicConstraints } from "../../utils/microphone-constraints";
+import { buildAudioChainSnapshot } from "../../utils/voice-audio-debug";
 import { MICROPHONE_RESTORED_MESSAGE, MICROPHONE_RESTORE_FAILED_MESSAGE, MICROPHONE_RESTORING_MESSAGE, getLocalServerMuteTransition, getServerMuteMicrophonePlan, isParticipantServerMuted, participantView } from "../../utils/voice-participant";
 import { getDisconnectOutcome, resolveMovedChannel } from "../../utils/voice-room-events";
 import { cleanupVoiceRoomAttempt, isVoiceRoomAttemptCurrent, shouldIgnoreConnectErrorForAttempt } from "../../utils/voice-room-lifecycle";
@@ -35,8 +36,12 @@ import {
 
 const CHAT_TOPIC = "nova-chat";
 
+function isVoiceDebugEnabled() {
+  return typeof window !== "undefined" && window.localStorage?.getItem("novaVoiceDebug") === "1";
+}
+
 function voiceLifecycleDebug(label, details) {
-  if (typeof window === "undefined" || window.localStorage?.getItem("novaVoiceDebug") !== "1") return;
+  if (!isVoiceDebugEnabled()) return;
   console.debug(`[voice-room] ${label}`, details);
 }
 
@@ -327,6 +332,21 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
 
     const valid = () => generation.current === currentGeneration && isVoiceRoomAttemptCurrent({ disposed, roomRef, room: activeRoom, connectAttemptRef, attemptId });
     const sync = (options = {}) => valid() && syncParticipants(activeRoom, options);
+    // audioElements.current 是稳定 Map 实例；effect 内取引用同时满足
+    // 诊断日志与 cleanup 阶段的 lint 约束。
+    const attemptAudioElements = audioElements.current;
+    const debugAudioChain = (label, trackSid) => {
+      if (!isVoiceDebugEnabled()) return;
+      voiceLifecycleDebug(label, buildAudioChainSnapshot({
+        attemptId,
+        channelId: channel.id,
+        trackSid,
+        entry: attemptAudioElements.get(trackSid) || null,
+        entries: attemptAudioElements.values(),
+        audioElementCount: attemptAudioElements.size,
+        room: activeRoom,
+      }));
+    };
     const attachAudio = (track, publication, participant) => {
       if (track.kind !== Track.Kind.Audio || audioElements.current.has(publication.trackSid)) return;
       const participantIdentity = participant?.identity || "";
@@ -356,15 +376,21 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       audioElements.current.set(publication.trackSid, entry);
       applyLocalAudioPrefs();
       document.body.appendChild(element);
+      debugAudioChain("audio-attached", publication.trackSid);
       Promise.resolve(element.play())
         // LiveKit 可能在开始播放时才建立 Web Audio GainNode，播放成功后必须
         // 再应用一次保存值，避免滑块显示 10% 而实际音轨仍是默认增益。
-        .then(() => { if (valid()) applyLocalAudioPrefs(); })
+        .then(() => {
+          if (!valid()) return;
+          applyLocalAudioPrefs();
+          debugAudioChain("audio-play-started", publication.trackSid);
+        })
         .catch(() => valid() && setAudioBlocked(true));
     };
     const detachAudio = (track, publication) => {
       const entry = audioElements.current.get(publication.trackSid);
       if (entry) {
+        debugAudioChain("audio-detaching", publication.trackSid);
         track.detach(entry.element);
         entry.element.remove();
         audioElements.current.delete(publication.trackSid);
@@ -471,7 +497,18 @@ export default function VoiceRoom({ channel, channels, currentUser, apiBase, onL
       activeRoom.off(RoomEvent.Moved, onMoved);
       activeRoom.off(RoomEvent.Disconnected, onDisconnected);
       activeRoom.removeAllListeners();
+      if (isVoiceDebugEnabled()) {
+        voiceLifecycleDebug("audio-cleanup-start", { attemptId, channelId: channel.id, audioElementCount: attemptAudioElements.size });
+      }
       cleanupAudio();
+      if (isVoiceDebugEnabled()) {
+        voiceLifecycleDebug("audio-cleanup-done", {
+          attemptId,
+          channelId: channel.id,
+          audioElementCount: attemptAudioElements.size,
+          remainingDomAudioElements: typeof document !== "undefined" ? document.querySelectorAll("audio.voice-remote-audio").length : null,
+        });
+      }
       const disconnected = cleanupVoiceRoomAttempt({ room: activeRoom, roomRef, disconnectReasonRef, reason: "effect-cleanup" });
       if (disconnected) voiceLifecycleDebug("disconnect-called", { attemptId, channelId: channel.id, roomIsCurrent: roomRef.current === activeRoom, reason: "effect-cleanup" });
     };
