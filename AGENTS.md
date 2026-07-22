@@ -2,6 +2,22 @@
 
 本文件是 NovaSpeak 仓库中所有自动化 Agent、Codex 和协作者的最高级项目说明。开始任何任务前必须完整阅读本文件，并以当前真实代码、数据库迁移和测试为准。历史对话、旧报告和旧分支只能作为线索，不能替代代码检查。
 
+服务器内容更新步骤
+
+ssh root@47.116.129.181
+
+cd /opt/novaspeak-app
+
+git status --short
+正常应该没有输出。
+
+git fetch origin
+git switch main
+git pull --ff-only origin main
+
+cd client 
+npm run build
+
 ---
 
 ## 1. 项目定位与当前基线
