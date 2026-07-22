@@ -1,16 +1,17 @@
-export const WEB_APP_VERSION = "3.0.6";
+export const WEB_APP_VERSION = "3.0.5";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
 // 桌面端大版本才标记 requiresDesktopUpdate: true 并通过 OTA 发布。
 export const RELEASE_NOTES = Object.freeze([
   Object.freeze({
-    version: "3.0.6",
-    title: "回滚不稳定的机器人音频链改动",
-    releasedAt: "2026-07-21",
+    version: "3.0.5",
+    title: "音乐机器人稳定正式版",
+    releasedAt: "2026-07-22",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "撤回 v3.0.5 的音乐机器人原生音频路径，恢复此前稳定的页面和语音行为",
-      "暂不继续叠加音量切换补丁，后续将在独立验证后重新修复切换频道音频异常",
+      "修复快速切换频道时音乐机器人可能恢复到 100% 音量的问题",
+      "修复用户实例化后音轨重建导致的声音异常问题",
+      "修复陈铖是人类的问题",
     ]),
   }),
   Object.freeze({
