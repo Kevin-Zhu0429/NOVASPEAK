@@ -38,6 +38,7 @@ function insertCustom(db, id = "custom-room") {
 
 const admin = { role: "admin" };
 const member = { role: "member" };
+const user = { role: "user" };
 const guest = { role: "guest" };
 
 test("channel migration seeds defaults once and marks only lobby as system", () => {
@@ -172,6 +173,7 @@ test("entry permissions follow accessLevel and allowGuests matrix and ignore for
   assert.equal(canEnterChannel({ access_level: "everyone", allow_guests: 0 }, guest), false);
   assert.equal(canEnterChannel({ access_level: "members", allow_guests: 1 }, guest), false);
   assert.equal(canEnterChannel({ access_level: "members", allow_guests: 0 }, member), true);
+  assert.equal(canEnterChannel({ access_level: "members", allow_guests: 0 }, user), true);
   assert.equal(canEnterChannel({ access_level: "members", allow_guests: 0 }, admin), true);
   assert.equal(canEnterChannel({ access_level: "admins", allow_guests: 1 }, member), false);
   assert.equal(canEnterChannel({ access_level: "admins", allow_guests: 1 }, guest), false);
