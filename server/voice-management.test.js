@@ -8,7 +8,7 @@ const guest = { id: "guest:g", role: "guest", displayName: "Guest", isGuest: tru
 const target = {
   identity: "target-id",
   name: "目标成员",
-  metadata: JSON.stringify({ displayName: "目标成员", role: "admin" }),
+  metadata: JSON.stringify({ displayName: "目标成员", role: "member" }),
   permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] },
   tracks: [{ sid: "mic-track", source: 2 }],
 };
@@ -61,6 +61,41 @@ test("voice management role permissions are based only on role", async () => {
   assert.equal((await service.move({ actor: member, sourceChannelId: "cs2", participantIdentity: "target-id", targetChannelId: "apex" })).success, true);
 });
 
+test("ordinary user moves users and guests only; member can also move members", async () => {
+  const ordinaryActor = { id: "ordinary-id", role: "user", displayName: "Ordinary" };
+  const userTarget = {
+    ...target,
+    metadata: JSON.stringify({ displayName: "普通用户", role: "user" }),
+  };
+  const guestTarget = {
+    ...target,
+    metadata: JSON.stringify({ displayName: "访客", role: "guest" }),
+  };
+  assert.equal((await makeService({ participants: [userTarget] }).service.move({
+    actor: ordinaryActor,
+    sourceChannelId: "cs2",
+    participantIdentity: "target-id",
+    targetChannelId: "apex",
+  })).success, true);
+  assert.equal((await makeService({ participants: [guestTarget] }).service.move({
+    actor: ordinaryActor,
+    sourceChannelId: "cs2",
+    participantIdentity: "target-id",
+    targetChannelId: "apex",
+  })).success, true);
+  assert.equal((await makeService().service.move({
+    actor: ordinaryActor,
+    sourceChannelId: "cs2",
+    participantIdentity: "target-id",
+    targetChannelId: "apex",
+  })).status, 403);
+  assert.equal((await makeService().service.remove({
+    actor: ordinaryActor,
+    sourceChannelId: "cs2",
+    participantIdentity: "target-id",
+  })).status, 403);
+});
+
 test("voice management rejects missing auth, self operations and invalid parameters", async () => {
   const { service } = makeService({ participants: [] });
   assert.equal((await service.remove({ actor: null, sourceChannelId: "cs2", participantIdentity: "target-id" })).status, 401);
@@ -99,7 +134,7 @@ test("remove and move call real LiveKit wrapper methods and update only source c
 test("muted member move migrates canonical record and reapplies metadata and permissions", async () => {
   const targetByRoom = {
     cs2: { ...target },
-    apex: { ...target, metadata: JSON.stringify({ displayName: "目标成员", role: "admin" }), permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] } },
+    apex: { ...target, metadata: JSON.stringify({ displayName: "目标成员", role: "member" }), permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: [2, 3] } },
   };
   const calls = [];
   const service = createVoiceManagementService({
