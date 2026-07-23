@@ -17,6 +17,10 @@ import {
   backupBeforeChatMigration,
   migrateChatMessages,
 } from "./chat/migrate.js";
+import {
+  backupBeforeUserRoleMigration,
+  migrateUserRoles,
+} from "./role-migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,7 +62,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
 
     role TEXT NOT NULL DEFAULT 'member'
-      CHECK (role IN ('member', 'admin')),
+      CHECK (role IN ('admin', 'member', 'user')),
 
     created_at INTEGER NOT NULL
   );
@@ -181,6 +185,19 @@ db.prepare(`
 
 // 兼容旧数据库：增加头像相对路径字段，旧用户默认 NULL
 migrateAvatarColumn(db);
+
+// 正式账号增加普通用户角色。旧表的 CHECK 约束无法原地修改，
+// 因此迁移前必须先在线备份，再以事务重建 users 表并校验外键。
+const userRoleBackup = await backupBeforeUserRoleMigration(db, {
+  databasePath,
+  preExistingDatabase,
+});
+if (userRoleBackup.backedUp) {
+  console.log(
+    `Database backup created before user role migration: ${userRoleBackup.backupPath}`
+  );
+}
+migrateUserRoles(db);
 
 migrateChannels(db);
 
