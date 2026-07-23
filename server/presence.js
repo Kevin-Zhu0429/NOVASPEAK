@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import db from "./db.js";
 import { resolveAuthenticatedIdentity } from "./auth-session.js";
+import { getRoleLabel } from "./authorization.js";
 
 export const PRESENCE_PATH = "/ws/presence";
 export const PRESENCE_STATES = new Set(["lobby", "in_channel", "reconnecting"]);
@@ -96,7 +97,8 @@ export function createPresenceService(options = {}) {
   function profileFor(user) {
     return {
       nickname: user.displayName || user.nickname,
-      roleLabel: user.role === "admin" ? "管理员" : user.isGuest ? "访客" : "成员",
+      role: user.role,
+      roleLabel: getRoleLabel(user.role),
       isGuest: Boolean(user.isGuest),
       positions: user.positions || [],
       positionNames: user.positionNames || [],
@@ -436,6 +438,20 @@ export function createPresenceService(options = {}) {
     return delivered;
   }
 
+  function disconnectRegisteredUser(userId, payload) {
+    const principal = principals.get(`user:${userId}`);
+    if (!principal) return false;
+    let delivered = false;
+    for (const connection of principal.connections.keys()) {
+      if (sendJson(connection, payload)) delivered = true;
+      const timer = setTimeout(() => {
+        try { connection.close(4003, "账号权限已变更"); } catch { closeAbnormalConnection(connection); }
+      }, 60);
+      timer.unref?.();
+    }
+    return delivered;
+  }
+
   function setConnectionLocation(identity, sourceChannelId, nextState) {
     const match = findChannelConnection(identity, sourceChannelId);
     if (!match) return false;
@@ -672,6 +688,7 @@ export function createPresenceService(options = {}) {
     cancelPresenceMemberMove,
     sendVoiceControlToPresenceMember,
     disconnectPresenceMember,
+    disconnectRegisteredUser,
     isUserInChannel,
     hasUsersInChannel,
     setConnectionLocation,
