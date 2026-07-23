@@ -59,19 +59,21 @@ test("总功率在容差内稳定：oldGain² + newGain² ≈ 1", () => {
   }
 });
 
-test("crossfadeProgress：600 帧生产淡化覆盖完整 0→1 闭区间", () => {
-  assert.equal(crossfadeProgress(0, 600), 0);
-  assert.equal(crossfadeProgress(599, 600), 1);
-  const first = equalPowerGains(crossfadeProgress(0, 600));
-  assert.equal(first.oldGain, 1); // 首个混音帧：old=1
-  assert.equal(first.newGain, 0); //             new=0
-  const last = equalPowerGains(crossfadeProgress(599, 600));
-  assert.ok(Math.abs(last.oldGain) < 1e-12); // 末个混音帧：old=0
+test("crossfadeProgress：1000 帧（10 秒）生产淡化覆盖完整 0→1 闭区间", () => {
+  assert.equal(crossfadeProgress(0, 1000), 0);
+  assert.equal(crossfadeProgress(999, 1000), 1);
+  const first = equalPowerGains(crossfadeProgress(0, 1000));
+  assert.equal(first.oldGain, 1); // 第 1 帧：old=1
+  assert.equal(first.newGain, 0); //           new=0
+  const last = equalPowerGains(crossfadeProgress(999, 1000));
+  assert.ok(Math.abs(last.oldGain) < 1e-12); // 第 1000 帧：old=0
   assert.equal(last.newGain, 1); //              new=1
   let previous = -1;
-  for (let frame = 0; frame < 600; frame += 1) {
-    const progress = crossfadeProgress(frame, 600);
+  for (let frame = 0; frame < 1000; frame += 1) {
+    const progress = crossfadeProgress(frame, 1000);
     assert.ok(progress >= previous); // 单调不减
+    const { oldGain, newGain } = equalPowerGains(progress);
+    assert.ok(Math.abs(oldGain * oldGain + newGain * newGain - 1) < 1e-9);
     previous = progress;
   }
 });

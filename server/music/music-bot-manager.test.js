@@ -12,6 +12,7 @@ import {
   shufflePendingQueue,
 } from "./music-queue.js";
 import {
+  DJ_TRANSITION_DEFAULTS,
   classifyPlaybackError,
   createMusicBotManager,
 } from "./music-bot-manager.js";
@@ -1018,6 +1019,49 @@ function makeDjHarness({
 function range(base, from, count) {
   return Array.from({ length: count }, (_, index) => base + from + index);
 }
+
+test("DJ 生产默认参数：10 秒淡化 = 1000 帧，剩余约 12 秒开始准备", () => {
+  assert.equal(DJ_TRANSITION_DEFAULTS.crossfadeMs, 10_000);
+  assert.equal(DJ_TRANSITION_DEFAULTS.crossfadeMs / 10, 1000); // 1000 个 10ms 帧
+  assert.equal(DJ_TRANSITION_DEFAULTS.prepareLeadMs, 12_000);
+  assert.ok(
+    DJ_TRANSITION_DEFAULTS.prepareLeadMs > DJ_TRANSITION_DEFAULTS.crossfadeMs
+  );
+  // 缓冲上限保持 8 秒（800 帧 = 1,536,000 字节），小于淡化时长：
+  // 就绪门槛取 min(1000, 800)，淡化期间解码器持续补充（见下方专项测试）
+  assert.equal(DJ_TRANSITION_DEFAULTS.prepBufferMaxFrames, 800);
+  assert.equal(DJ_TRANSITION_DEFAULTS.prepBufferMaxFrames * 1920, 1_536_000);
+});
+
+test("缓冲上限小于淡化帧数：淡化仍走满全部帧并靠实时补充完成", async () => {
+  // 缩放模型：30 帧淡化 vs 10 帧缓冲（与生产 1000 帧 vs 800 帧同构）
+  const h = makeDjHarness({
+    frameCounts: { 1: 120 }, // 旧歌实际比 duration_ms 长：淡化不得被压缩
+    djOverrides: {
+      crossfadeMs: 300,
+      prepareLeadMs: 500,
+      prepBufferMaxFrames: 10,
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 20 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-20"), "finished");
+  assert.equal(h.maxActiveDecodes, 2);
+  // 淡化走满 30 帧：末混音帧 progress=1 → 恰为纯新歌第 29 帧
+  assert.ok(h.captured.includes(20029));
+  // 走满后无 ramp：交接后纯新歌从第 30 帧连续播到第 99 帧
+  assert.deepEqual(h.captured.slice(-70), range(20000, 30, 70));
+  // 旧歌尾部（第 99~119 帧）只在淡化完整走满后被切断，绝不提前
+  assert.equal(
+    h.captured.some((value) => value >= 1099 && value <= 1119),
+    false
+  );
+  assert.equal(h.activeDecodes, 0);
+  h.db.close();
+});
 
 test("DJ 关闭时行为与当前版本完全一致：严格串行、无第二解码、无混音", async () => {
   const h = makeDjHarness();

@@ -131,10 +131,12 @@ const DEFAULT_BACKOFF_MAX_MS = 60_000;
 /**
  * DJ 过渡默认参数（测试可整体注入覆盖）。
  * 帧长固定 10ms：预取缓冲上限 800 帧 = 8 秒 = 800 × 1920 字节 ≈ 1.5 MiB。
+ * 缓冲上限（8 秒）小于淡化时长（10 秒）是刻意的：就绪门槛取
+ * min(淡化帧数, 缓冲上限)，淡化期间下一首解码器持续实时补充。
  */
 export const DJ_TRANSITION_DEFAULTS = Object.freeze({
-  crossfadeMs: 6_000,          // 交叉淡化重叠时长
-  prepareLeadMs: 8_000,        // 预计剩余多少毫秒时开始准备下一首
+  crossfadeMs: 10_000,         // 交叉淡化重叠时长：10 秒 = 1000 帧
+  prepareLeadMs: 12_000,       // 预计剩余约 12 秒开始准备下一首
   minCurrentDurationMs: 20_000, // 当前歌短于此值回退普通串行切换
   minNextDurationMs: 10_000,   // 候选歌短于此值不作为淡化对象
   prepBufferMaxFrames: 800,    // 有界预取缓冲：8 秒 PCM
@@ -391,7 +393,13 @@ export function createMusicBotManager({
     }
 
     function prepReady(prep) {
-      return prep.buffer.size >= crossfadeFrames || prep.buffer.ended;
+      // 就绪门槛不能超过缓冲上限（10 秒淡化 vs 8 秒缓冲）：
+      // 预热到上限即可开始，淡化期间解码器边播边补
+      const targetFrames = Math.min(
+        crossfadeFrames,
+        djOptions.prepBufferMaxFrames
+      );
+      return prep.buffer.size >= targetFrames || prep.buffer.ended;
     }
 
     function candidateStillValid(candidate) {
@@ -503,9 +511,12 @@ export function createMusicBotManager({
         cancelPrep();
         return;
       }
+      // 正常淡化必须走满全部帧数，不因 duration_ms 误差压缩曲线：
+      // 旧歌只会因「混满全部帧」「实际 EOF」「跳过/清空/停止」终止。
+      // 旧歌若早于淡化走满而 EOF，走既有 300ms 平滑接管路径。
       state.fade = {
         framesMixed: 0,
-        totalFrames: Math.max(1, Math.min(crossfadeFrames, remaining)),
+        totalFrames: crossfadeFrames,
         newFramesCaptured: 0,
         lastOldGain: 1,
         lastNewGain: 0,
@@ -877,6 +888,9 @@ export function createMusicBotManager({
             // 清理失败不影响错误分类
           }
           carried.buffer.close();
+          // decodeResult 是永不 reject 的已结算对象：等它收尾，
+          // 保证离开本函数时不残留仍在退出中的解码任务
+          await carried.decodeResult;
         }
       }
     }
@@ -1060,6 +1074,9 @@ export function createMusicBotManager({
         } catch {
           // 清理失败继续释放其余资源
         }
+        // 等待被中止的预取解码完全退出（已结算对象，绝不抛），
+        // 保证 stop() resolve 时不残留解码任务
+        await carried.decodeResult;
         try {
           requeueClaimedItem(db, {
             queueItemId: carried.receipt.queueItem.id,

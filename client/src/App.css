@@ -2357,7 +2357,7 @@ input {
 .music-bot-cover-avatar { width: 54px; height: 54px; overflow: hidden; display: grid; place-items: center; border: 1px solid rgba(94, 234, 212, .28); border-radius: 11px; color: #5eead4; background: rgba(15, 118, 110, .2); box-shadow: 0 8px 18px rgba(0, 0, 0, .26); }
 .music-bot-cover-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .music-bot-cover-avatar svg { width: 23px; }
-.music-bot-participant-copy { min-width: 0; display: grid; gap: 3px; padding-right: 24px; }
+.music-bot-participant-copy { min-width: 0; display: grid; gap: 3px; padding-right: 24px; container-type: inline-size; }
 .music-bot-participant-copy > strong, .music-bot-participant-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .music-bot-participant-copy > strong { color: #f0fdfa; font-size: 13px; }
 .music-bot-participant-copy > span { color: #a7c7cc; font-size: 11px; }
@@ -2366,12 +2366,26 @@ input {
 .music-bot-card-progress-row > span { color: #8fb0b6; font-size: 9px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .music-bot-card-progress { height: 4px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, .2); }
 .music-bot-card-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #14b8a6, #67e8f9); transition: width .45s linear; }
-.music-bot-card-controls { min-width: 0; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
-.music-bot-card-controls button { min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 4px 7px; border: 1px solid rgba(45, 212, 191, .24); border-radius: 7px; color: #ccfbf1; background: rgba(15, 118, 110, .22); font-size: 10px; }
+/* 机器人控制区：等宽等高按钮网格，文字永不逐字换行或竖排。
+   按名片实际可用宽度（container query，非视口宽度）三档切换：
+   ≥280px（≤760px 视口的全宽面板、约 461px 及以上窗口）一行三个；
+   默认（桌面 310px 侧栏，名片可用约 150px）两列 + DJ 独占整行；
+   <118px 极窄时逐行排列。不支持 container query 的环境退化为默认档。 */
+.music-bot-card-controls { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 5px; }
+.music-bot-card-controls button { min-width: 0; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 6px; overflow: hidden; border: 1px solid rgba(45, 212, 191, .24); border-radius: 8px; color: #ccfbf1; background: rgba(15, 118, 110, .22); font-size: 10px; white-space: nowrap; word-break: keep-all; }
+.music-bot-card-controls button svg { flex: 0 0 auto; }
 .music-bot-card-controls button:hover:not(:disabled) { border-color: rgba(45, 212, 191, .58); background: rgba(15, 118, 110, .42); }
 .music-bot-card-controls button:disabled { opacity: .45; cursor: not-allowed; }
-.music-bot-card-controls em { min-width: 0; overflow: hidden; color: #fbbf24; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.music-bot-card-controls .music-dj-toggle { grid-column: 1 / -1; }
+.music-bot-card-controls em { grid-column: 1 / -1; min-width: 0; overflow: hidden; color: #fbbf24; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .music-bot-card-controls button.music-dj-toggle-on { border-color: rgba(45, 212, 191, .72); background: rgba(13, 148, 136, .5); color: #f0fdfa; }
+@container (min-width: 280px) {
+  .music-bot-card-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .music-bot-card-controls .music-dj-toggle { grid-column: auto; }
+}
+@container (max-width: 118px) {
+  .music-bot-card-controls { grid-template-columns: minmax(0, 1fr); }
+}
 .voice-level { position: absolute; left: 0; bottom: 0; width: calc(var(--voice-level) * 100%); max-width: 100%; height: 2px; background: #2dd4bf; transition: width .12s linear; }
 .voice-control-bar { position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; min-height: 76px; padding: 12px 20px; display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(94, 234, 212, .14); background: rgba(3, 15, 22, .96); }
 .voice-control-bar button { min-width: 112px; padding: 9px 13px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(148, 163, 184, .15); border-radius: 11px; color: #dbeafe; background: #172033; }

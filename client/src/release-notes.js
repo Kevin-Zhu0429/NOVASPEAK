@@ -1,16 +1,19 @@
-export const WEB_APP_VERSION = "3.0.6";
+// 3.0.6 已被生产环境使用（见 AGENTS.md 生产基线快照），本次未合并的
+// DJ 功能直接使用下一个未占用的补丁版本 3.0.7。
+export const WEB_APP_VERSION = "3.0.7";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
 // 桌面端大版本才标记 requiresDesktopUpdate: true 并通过 OTA 发布。
 export const RELEASE_NOTES = Object.freeze([
   Object.freeze({
-    version: "3.0.6",
-    title: "音乐机器人 DJ 过渡",
+    version: "3.0.7",
+    title: "音乐机器人 DJ 混音",
     releasedAt: "2026-07-23",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "新增音乐机器人 DJ 等功率交叉淡化：切歌前约 6 秒下一首平滑淡入重叠",
-      "新增每频道 DJ 过渡开关，管理员与战队成员可在机器人名片上开启或关闭",
+      "新增音乐机器人 DJ 等功率交叉淡化：切歌前约 10 秒下一首平滑淡入重叠",
+      "新增每频道 DJ 混音开关，管理员与战队成员可在机器人名片上开启或关闭",
+      "优化音乐机器人控制按钮布局：等宽等高排列，窄窗口下不再挤成竖排文字",
       "保持公平队列、暂停、切歌和清空队列行为完全兼容",
     ]),
   }),

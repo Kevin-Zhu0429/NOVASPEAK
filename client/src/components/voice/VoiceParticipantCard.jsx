@@ -97,10 +97,10 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
               onClick={musicStatus.toggleDjTransition}
               disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)}
               aria-pressed={musicStatus.djTransitionEnabled}
-              title={!musicStatus.canControl ? "访客不可控制" : musicStatus.djTransitionState === "crossfading" ? "DJ 过渡进行中：两首歌正在交叉淡化" : musicStatus.djTransitionEnabled ? "已开启：切歌前 6 秒下一首淡入重叠（点击关闭）" : "已关闭：点击开启 DJ 交叉淡化切歌"}
-              aria-label={musicStatus.djTransitionEnabled ? "关闭 DJ 过渡" : "开启 DJ 过渡"}
+              title={!musicStatus.canControl ? "访客不可控制" : musicStatus.djTransitionState === "crossfading" ? "DJ 混音进行中：两首歌正在交叉淡化" : musicStatus.djTransitionEnabled ? "DJ 混音已开启：切歌前约 10 秒下一首淡入重叠（点击关闭）" : "DJ 混音已关闭：点击开启等功率交叉淡化切歌"}
+              aria-label={musicStatus.djTransitionEnabled ? "关闭 DJ 混音过渡（当前开启）" : "开启 DJ 混音过渡（当前关闭）"}
             >
-              <Disc3 size={14} /><span>DJ 过渡·{musicStatus.djTransitionEnabled ? "开" : "关"}</span>
+              <Disc3 size={14} /><span>DJ混音：{musicStatus.djTransitionEnabled ? "开" : "关"}</span>
             </button>
             {musicStatus.error && <em title={musicStatus.error}>控制状态异常</em>}
           </div>
