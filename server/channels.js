@@ -105,10 +105,12 @@ export function getChannelById(db, id) {
 export function canEnterChannel(channel, user) {
   if (!channel || !user) return false;
   if (channel.access_level === "admins") return user.role === "admin";
-  if (channel.access_level === "members") return user.role === "admin" || user.role === "member";
+  if (channel.access_level === "members") {
+    return user.role === "admin" || user.role === "member" || user.role === "user";
+  }
   if (channel.access_level === "everyone") {
     if (user.role === "guest") return Boolean(channel.allow_guests);
-    return user.role === "admin" || user.role === "member";
+    return user.role === "admin" || user.role === "member" || user.role === "user";
   }
   return false;
 }
