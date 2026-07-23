@@ -16,9 +16,14 @@ import {
   claimNextQueueItem,
   enqueueTracks,
   finishQueueItem,
+  getQueueItemStatus,
   getQueueSnapshot,
   getRemainingQueueCapacity,
+  handoverCrossfadeQueueItem,
   hasPendingItems,
+  isDjTransitionEnabled,
+  peekNextQueueCandidate,
+  setDjTransitionEnabled,
   listChannelsWithPending,
   markQueueItemPlaybackStarted,
   recoverInterruptedQueueItems,
@@ -727,5 +732,231 @@ test("管理员清空频道只取消 pending，其他频道和当前 playing 保
       { song_name: "QB1", status: "pending" },
     ]
   );
+  db.close();
+});
+
+// ---------- DJ 交叉淡化：peek / 交接 / 开关 ----------
+
+test("peekNextQueueCandidate 只读：不改状态、不推进公平游标", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["DJ-A1", "DJ-A2"]);
+  enqueueMany(db, "user-b", ["DJ-B1"]);
+
+  const before = db
+    .prepare("SELECT last_served_bucket_order, revision FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get();
+  const candidate = peekNextQueueCandidate(db, { channelId: "cs2" });
+  assert.equal(
+    db.prepare("SELECT song_name FROM music_queue_items WHERE id = ?").get(candidate.queueItemId).song_name,
+    "DJ-A1"
+  );
+  assert.equal(candidate.prioritized, false);
+  assert.ok(candidate.durationMs > 0);
+
+  const after = db
+    .prepare("SELECT last_served_bucket_order, revision FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get();
+  assert.deepEqual(after, before); // 只读：游标与 revision 均不变
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS c FROM music_queue_items WHERE status = 'playing'").get().c,
+    0
+  );
+  // 重复 peek 结果一致（reservation 由 worker 内存持有，重启自然失效不丢歌）
+  assert.equal(peekNextQueueCandidate(db, { channelId: "cs2" }).queueItemId, candidate.queueItemId);
+  db.close();
+});
+
+test("handoverCrossfadeQueueItem：单事务交接并推进公平游标", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["HO-A1", "HO-A2"]);
+  enqueueMany(db, "user-b", ["HO-B1"]);
+  const first = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+  assert.equal(first.queueItem.song_name, "HO-A1");
+  const cursorAfterClaim = db
+    .prepare("SELECT last_served_bucket_order FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get().last_served_bucket_order;
+
+  const candidate = peekNextQueueCandidate(db, { channelId: "cs2" });
+  const receipt = handoverCrossfadeQueueItem(db, {
+    channelId: "cs2",
+    currentQueueItemId: first.queueItem.id,
+    nextQueueItemId: candidate.queueItemId,
+    outcome: "finished",
+    startedAt: 5_000,
+    now: 11_000,
+  });
+  assert.equal(receipt.queueItem.song_name, "HO-B1");
+  assert.equal(receipt.queueItem.status, "playing");
+  assert.equal(receipt.queueItem.started_at, 5_000); // 进度包含已混入的淡化时长
+  assert.equal(receipt.previousLastServedBucketOrder, cursorAfterClaim);
+  assert.equal(receipt.priorityClaim, false);
+  assert.equal(
+    db.prepare("SELECT status FROM music_queue_items WHERE id = ?").get(first.queueItem.id).status,
+    "finished"
+  );
+  // 游标推进到 user-b 桶：之后轮到 user-a（A2）
+  assert.equal(
+    peekNextQueueCandidate(db, { channelId: "cs2" }).principalKey,
+    "user-a"
+  );
+  // 交接 receipt 可用于基础设施故障 requeue，恢复交接前公平位置
+  assert.equal(
+    requeueClaimedItem(db, {
+      queueItemId: receipt.queueItem.id,
+      previousLastServedBucketOrder: receipt.previousLastServedBucketOrder,
+    }),
+    true
+  );
+  assert.equal(
+    db.prepare("SELECT status FROM music_queue_items WHERE id = ?").get(receipt.queueItem.id).status,
+    "pending"
+  );
+  assert.equal(
+    peekNextQueueCandidate(db, { channelId: "cs2" }).queueItemId,
+    receipt.queueItem.id
+  ); // 游标恢复后 B1 仍然是下一首
+  db.close();
+});
+
+test("handover 前置校验失败返回 null 且不做任何修改（游标不推进）", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["HV-A1", "HV-A2"]);
+  const first = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+  const candidate = peekNextQueueCandidate(db, { channelId: "cs2" });
+  const stateBefore = db
+    .prepare("SELECT last_served_bucket_order, revision FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get();
+
+  // 候选已被取消：pending 校验失败
+  cancelQueueItem(db, {
+    channelId: "cs2",
+    queueItemId: candidate.queueItemId,
+    principalKey: "user-a",
+  });
+  const revisionAfterCancel = db
+    .prepare("SELECT revision FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get().revision;
+  assert.equal(
+    handoverCrossfadeQueueItem(db, {
+      channelId: "cs2",
+      currentQueueItemId: first.queueItem.id,
+      nextQueueItemId: candidate.queueItemId,
+      startedAt: 1,
+    }),
+    null
+  );
+  // 当前歌不再 playing：同样拒绝
+  finishQueueItem(db, { queueItemId: first.queueItem.id, outcome: "finished" });
+  assert.equal(
+    handoverCrossfadeQueueItem(db, {
+      channelId: "cs2",
+      currentQueueItemId: first.queueItem.id,
+      nextQueueItemId: candidate.queueItemId,
+      startedAt: 1,
+    }),
+    null
+  );
+  const stateAfter = db
+    .prepare("SELECT last_served_bucket_order, revision FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get();
+  assert.equal(stateAfter.last_served_bucket_order, stateBefore.last_served_bucket_order);
+  assert.equal(stateAfter.revision >= revisionAfterCancel, true);
+  db.close();
+});
+
+test("置顶候选交接沿用置顶语义：不消费用户桶轮次", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["PR-A1", "PR-A2"]);
+  enqueueMany(db, "user-b", ["PR-B1", "PR-B2"]);
+  const first = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 }); // A1，游标到 A 桶
+  assert.equal(first.queueItem.song_name, "PR-A1");
+  const b2 = db.prepare("SELECT id FROM music_queue_items WHERE song_name = 'PR-B2'").get();
+  prioritizeQueueItem(db, { channelId: "cs2", queueItemId: b2.id });
+
+  const candidate = peekNextQueueCandidate(db, { channelId: "cs2" });
+  assert.equal(candidate.queueItemId, b2.id);
+  assert.equal(candidate.prioritized, true);
+  const cursorBefore = db
+    .prepare("SELECT last_served_bucket_order FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get().last_served_bucket_order;
+  const receipt = handoverCrossfadeQueueItem(db, {
+    channelId: "cs2",
+    currentQueueItemId: first.queueItem.id,
+    nextQueueItemId: b2.id,
+    startedAt: 2_000,
+  });
+  assert.equal(receipt.priorityClaim, true);
+  const cursorAfter = db
+    .prepare("SELECT last_served_bucket_order FROM music_queue_state WHERE channel_id = 'cs2'")
+    .get().last_served_bucket_order;
+  assert.equal(cursorAfter, cursorBefore); // 置顶交接不动游标
+  // 置顶播完后仍从 A 桶之后继续轮转：下一位是 user-b 的 B1
+  finishQueueItem(db, { queueItemId: b2.id, outcome: "finished" });
+  assert.equal(peekNextQueueCandidate(db, { channelId: "cs2" }).principalKey, "user-b");
+  db.close();
+});
+
+test("handover 交接后 A/B 公平交替不变：A1→B1→A2→B2→A3", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["FQ-A1", "FQ-A2", "FQ-A3"]);
+  enqueueMany(db, "user-b", ["FQ-B1", "FQ-B2"]);
+  const playedOrder = [];
+  let current = claimNextQueueItem(db, { channelId: "cs2", now: 1_000 });
+  playedOrder.push(current.queueItem.song_name);
+  for (;;) {
+    const candidate = peekNextQueueCandidate(db, { channelId: "cs2" });
+    if (!candidate) {
+      finishQueueItem(db, { queueItemId: current.queueItem.id, outcome: "finished" });
+      break;
+    }
+    const receipt = handoverCrossfadeQueueItem(db, {
+      channelId: "cs2",
+      currentQueueItemId: current.queueItem.id,
+      nextQueueItemId: candidate.queueItemId,
+      startedAt: Date.now(),
+    });
+    playedOrder.push(receipt.queueItem.song_name);
+    current = receipt;
+  }
+  assert.deepEqual(playedOrder, ["FQ-A1", "FQ-B1", "FQ-A2", "FQ-B2", "FQ-A3"]);
+  db.close();
+});
+
+test("DJ 过渡开关：默认关闭、持久化、revision 递增", () => {
+  const db = createDb();
+  assert.equal(isDjTransitionEnabled(db, "cs2"), false); // 默认关闭
+
+  const on = setDjTransitionEnabled(db, { channelId: "cs2", enabled: true, now: 1_000 });
+  assert.equal(on.enabled, true);
+  assert.equal(isDjTransitionEnabled(db, "cs2"), true);
+
+  // 其他队列操作（claim/requeue/bumpRevision 的 upsert）不覆盖开关
+  enqueueMany(db, "user-a", ["SW-A1", "SW-A2"]);
+  const receipt = claimNextQueueItem(db, { channelId: "cs2", now: 2_000 });
+  requeueClaimedItem(db, {
+    queueItemId: receipt.queueItem.id,
+    previousLastServedBucketOrder: receipt.previousLastServedBucketOrder,
+  });
+  assert.equal(isDjTransitionEnabled(db, "cs2"), true);
+
+  const off = setDjTransitionEnabled(db, { channelId: "cs2", enabled: false, now: 3_000 });
+  assert.equal(off.enabled, false);
+  assert.ok(off.revision > on.revision);
+  assert.equal(isDjTransitionEnabled(db, "cs2"), false);
+
+  assert.throws(
+    () => setDjTransitionEnabled(db, { channelId: "no-such", enabled: true }),
+    (error) => error.code === MUSIC_QUEUE_ERROR.CHANNEL_NOT_FOUND
+  );
+  db.close();
+});
+
+test("getQueueItemStatus 返回频道内项目状态", () => {
+  const db = createDb();
+  enqueueMany(db, "user-a", ["ST-A1"]);
+  const row = db.prepare("SELECT id FROM music_queue_items WHERE song_name = 'ST-A1'").get();
+  assert.equal(getQueueItemStatus(db, { channelId: "cs2", queueItemId: row.id }), "pending");
+  assert.equal(getQueueItemStatus(db, { channelId: "apex", queueItemId: row.id }), null);
+  assert.equal(getQueueItemStatus(db, { channelId: "cs2", queueItemId: 99_999 }), null);
   db.close();
 });

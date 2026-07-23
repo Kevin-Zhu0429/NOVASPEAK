@@ -202,4 +202,18 @@ export function migrateMusicQueue(db) {
         principal_key, queue_order, id
       );
   `);
+
+  // DJ 过渡开关：每频道持久化布尔，默认关闭。纯增量列（常量默认值），
+  // 不改动任何既有数据，无需单独备份；迁移可重复执行。
+  const stateColumns = new Set(
+    db
+      .prepare("PRAGMA table_info(music_queue_state)")
+      .all()
+      .map((column) => column.name)
+  );
+  if (!stateColumns.has("dj_transition_enabled")) {
+    db.exec(
+      "ALTER TABLE music_queue_state ADD COLUMN dj_transition_enabled INTEGER NOT NULL DEFAULT 0"
+    );
+  }
 }

@@ -731,6 +731,169 @@ export function requeueClaimedItem(
   })();
 }
 
+/**
+ * 只读窥视下一首公平候选（DJ 交叉淡化预取用）。
+ * 不 claim、不改任何状态、不推进公平游标——真正的状态迁移只发生在
+ * handoverCrossfadeQueueItem 或常规 claimNextQueueItem 的事务里。
+ * 返回值仅供服务端 worker 内部 reservation 使用，绝不返回给客户端
+ * （principalKey 等字段不得出现在任何 HTTP 响应中）。
+ */
+export function peekNextQueueCandidate(db, { channelId }) {
+  const state = getQueueState(db, channelId);
+  const { ordered } = projectPendingRows(db, channelId, state);
+  if (ordered.length === 0) return null;
+  const row = ordered[0].row;
+  return {
+    queueItemId: row.id,
+    principalKey: row.principal_key,
+    songId: row.song_id,
+    durationMs: Math.max(0, Number(row.duration_ms) || 0),
+    prioritized: Number(row.priority_order) > 0,
+    queueRevision: state.revision,
+  };
+}
+
+/**
+ * 查询队列项当前状态（服务端内部使用；候选有效性校验用）。
+ */
+export function getQueueItemStatus(db, { channelId, queueItemId }) {
+  return (
+    db
+      .prepare(
+        "SELECT status FROM music_queue_items WHERE id = ? AND channel_id = ?"
+      )
+      .get(queueItemId, channelId)?.status ?? null
+  );
+}
+
+const HANDOVER_OUTCOMES = new Set(["finished", "skipped"]);
+
+/**
+ * DJ 交叉淡化交接：在单个事务内完成
+ *   当前 playing → finished/skipped；
+ *   候选 pending → playing（started_at 回溯，包含已混入的淡化时长）；
+ *   公平游标推进（置顶候选沿用置顶语义，不消费用户桶轮次）；
+ *   revision 递增。
+ * 任一前置校验失败（当前歌不再 playing、候选不再 pending）返回 null，
+ * 不做任何修改——调用方必须停止候选的声音并退化为普通串行切换。
+ * 返回结构与 claimNextQueueItem 的 receipt 一致，后续基础设施故障时
+ * 可用 requeueClaimedItem 恢复到交接前的公平位置。
+ */
+export function handoverCrossfadeQueueItem(
+  db,
+  {
+    channelId,
+    currentQueueItemId,
+    nextQueueItemId,
+    outcome = "finished",
+    startedAt,
+    now = Date.now(),
+  }
+) {
+  if (!HANDOVER_OUTCOMES.has(outcome)) {
+    throw new MusicQueueError(
+      MUSIC_QUEUE_ERROR.ITEM_NOT_FOUND,
+      "无效的交接结束状态",
+      400
+    );
+  }
+  return db.transaction(() => {
+    const current = db
+      .prepare(
+        "SELECT id FROM music_queue_items WHERE id = ? AND channel_id = ? AND status = 'playing'"
+      )
+      .get(currentQueueItemId, channelId);
+    if (!current) return null;
+
+    const next = db
+      .prepare(
+        "SELECT * FROM music_queue_items WHERE id = ? AND channel_id = ? AND status = 'pending'"
+      )
+      .get(nextQueueItemId, channelId);
+    if (!next) return null;
+
+    const state = getQueueState(db, channelId);
+
+    db.prepare(
+      "UPDATE music_queue_items SET status = ?, finished_at = ? WHERE id = ? AND status = 'playing'"
+    ).run(outcome, now, current.id);
+
+    db.prepare(
+      "UPDATE music_queue_items SET status = 'playing', started_at = ? WHERE id = ? AND status = 'pending'"
+    ).run(
+      Number.isSafeInteger(startedAt) ? startedAt : now,
+      next.id
+    );
+
+    const bucketOrder = db
+      .prepare(
+        "SELECT bucket_order FROM music_queue_buckets WHERE channel_id = ? AND principal_key = ?"
+      )
+      .get(channelId, next.principal_key)?.bucket_order;
+
+    const isPriorityClaim = Number(next.priority_order) > 0;
+    if (isPriorityClaim) {
+      // 与 claimNextQueueItem 相同：置顶是临时抢占，不消费用户桶轮次
+      bumpRevision(db, channelId, now);
+    } else {
+      db.prepare(`
+        INSERT INTO music_queue_state (channel_id, last_served_bucket_order, revision, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          last_served_bucket_order = excluded.last_served_bucket_order,
+          revision = revision + 1,
+          updated_at = excluded.updated_at
+      `).run(channelId, bucketOrder ?? 0, now);
+    }
+
+    return {
+      queueItem: db
+        .prepare("SELECT * FROM music_queue_items WHERE id = ?")
+        .get(next.id),
+      previousLastServedBucketOrder: state.last_served_bucket_order,
+      servedBucketOrder: bucketOrder ?? 0,
+      priorityClaim: isPriorityClaim,
+    };
+  })();
+}
+
+/**
+ * 读取频道 DJ 过渡开关（无状态行时默认关闭）。
+ */
+export function isDjTransitionEnabled(db, channelId) {
+  const row = db
+    .prepare(
+      "SELECT dj_transition_enabled AS enabled FROM music_queue_state WHERE channel_id = ?"
+    )
+    .get(channelId);
+  return Number(row?.enabled) === 1;
+}
+
+/**
+ * 设置频道 DJ 过渡开关（持久化，服务重启后保留）。
+ * 递增 revision，让轮询中的客户端尽快感知开关变化。
+ */
+export function setDjTransitionEnabled(
+  db,
+  { channelId, enabled, now = Date.now() }
+) {
+  return db.transaction(() => {
+    ensureChannel(db, channelId);
+    db.prepare(`
+      INSERT INTO music_queue_state (channel_id, last_served_bucket_order, revision, dj_transition_enabled, updated_at)
+      VALUES (?, 0, 1, ?, ?)
+      ON CONFLICT(channel_id) DO UPDATE SET
+        dj_transition_enabled = excluded.dj_transition_enabled,
+        revision = revision + 1,
+        updated_at = excluded.updated_at
+    `).run(channelId, enabled === true ? 1 : 0, now);
+    return {
+      enabled: enabled === true,
+      revision: getQueueState(db, channelId).revision,
+    };
+  })();
+}
+
 const FINISH_OUTCOMES = new Set(["finished", "skipped", "failed"]);
 
 /**

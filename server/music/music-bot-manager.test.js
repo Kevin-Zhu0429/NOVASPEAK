@@ -3,11 +3,19 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import Database from "better-sqlite3";
 import { migrateMusicQueue } from "./queue-migrate.js";
-import { enqueueTracks } from "./music-queue.js";
+import {
+  cancelQueueItem,
+  clearPendingQueue,
+  enqueueTracks,
+  prioritizeQueueItem,
+  setDjTransitionEnabled,
+  shufflePendingQueue,
+} from "./music-queue.js";
 import {
   classifyPlaybackError,
   createMusicBotManager,
 } from "./music-bot-manager.js";
+import { equalPowerGains } from "./crossfade-mixer.js";
 
 // 全部依赖注入 mock：不触碰真实 FFmpeg / LiveKit / 网易云 / 网络 / 生产库
 
@@ -835,4 +843,663 @@ test("成员在空置期限内返回会取消暂停倒计时", async () => {
   await manager.stop();
   assert.equal(statusOf(db, songName), "pending");
   db.close();
+});
+
+// ---------- DJ 等功率交叉淡化 ----------
+//
+// 帧值编码：marker*1000 + 帧序号（0 起）。10ms/帧；测试参数把
+// 交叉淡化压缩到 10 帧、准备提前量 30 帧、拉满 ramp 3 帧、逐帧复查。
+// 100 帧歌曲（durationMs=1000）的标准轨迹：
+//   纯旧歌 89 帧 → 等功率混音 10 帧 → 拉满 ramp 3 帧 → 纯新歌 87 帧。
+
+const unhandledRejections = [];
+const onUnhandledRejection = (reason) => {
+  unhandledRejections.push(reason);
+};
+process.on("unhandledRejection", onUnhandledRejection);
+
+const DJ_TEST_OPTIONS = Object.freeze({
+  crossfadeMs: 100,
+  prepareLeadMs: 300,
+  minCurrentDurationMs: 0,
+  minNextDurationMs: 0,
+  prepBufferMaxFrames: 20,
+  rampMs: 30,
+  checkIntervalFrames: 1,
+});
+
+function djEnqueue(db, principalKey, entries, channelId = "cs2") {
+  return enqueueTracks(db, {
+    channelId,
+    principalKey,
+    requesterDisplayName: `名-${principalKey}`,
+    tracks: entries.map((entry) => ({
+      id: String(entry.marker),
+      name: `DJ歌-${entry.marker}`,
+      artists: [],
+      album: null,
+      durationMs: entry.durationMs ?? 1000,
+      fee: 0,
+    })),
+  });
+}
+
+function itemIdOf(db, marker) {
+  return db
+    .prepare("SELECT id FROM music_queue_items WHERE song_name = ?")
+    .get(`DJ歌-${marker}`).id;
+}
+
+function makeDjHarness({
+  frameCounts = {},
+  decodeFailures = {},
+  urlFailures = {},
+  djOverrides = {},
+  hasUsers = null,
+  idlePauseMs = 120_000,
+  onCapture = null,
+} = {}) {
+  const db = createDb();
+  const captured = [];
+  const decodeOrder = [];
+  const logs = [];
+  let activeDecodes = 0;
+  let maxActiveDecodes = 0;
+  let sessionsCreated = 0;
+  let sessionsClosed = 0;
+
+  function framesFor(songId) {
+    if (frameCounts[songId] !== undefined) return frameCounts[songId];
+    const row = db
+      .prepare("SELECT duration_ms FROM music_queue_items WHERE song_id = ? LIMIT 1")
+      .get(songId);
+    return Math.max(1, Math.floor((row?.duration_ms ?? 1000) / 10));
+  }
+
+  const harness = {
+    db,
+    captured,
+    decodeOrder,
+    logs,
+    manager: null,
+    get activeDecodes() {
+      return activeDecodes;
+    },
+    get maxActiveDecodes() {
+      return maxActiveDecodes;
+    },
+    get sessionsCreated() {
+      return sessionsCreated;
+    },
+    get sessionsClosed() {
+      return sessionsClosed;
+    },
+  };
+
+  harness.manager = createMusicBotManager({
+    db,
+    presenceService: { hasUsersInChannel: hasUsers ?? (() => true) },
+    ffmpegRuntime: {
+      probeFfmpeg: async () => ({ ffmpegPath: "/fake/ffmpeg" }),
+      clearProbeCache: () => {},
+    },
+    loadCredential: () => ({ cookie: "MUSIC_U=fake", neteaseUserId: "1" }),
+    neteaseClient: {
+      getSongPlaybackUrl: async ({ songId }) => {
+        if (urlFailures[songId]) {
+          const error = new Error("播放地址不可用");
+          error.code = urlFailures[songId];
+          throw error;
+        }
+        return { url: `https://m701.music.126.net/${songId}.mp3` };
+      },
+    },
+    createAudioSession: async () => {
+      sessionsCreated += 1;
+      return {
+        identity: "music-bot:cs2",
+        captureFrame: async (frame) => {
+          captured.push(frame[0]);
+          if (onCapture) await onCapture(frame[0], harness);
+        },
+        waitForPlayout: async () => {},
+        close: async () => {
+          sessionsClosed += 1;
+        },
+      };
+    },
+    openMediaStream: async (url) => ({
+      songId: url.slice(url.lastIndexOf("/") + 1).replace(".mp3", ""),
+    }),
+    createByteLimit: () => null,
+    decodeToFrames: async ({ mediaStream, onFrame, signal }) => {
+      const songId = mediaStream.songId;
+      decodeOrder.push(songId);
+      const pendingFailure = decodeFailures[songId]?.shift();
+      if (pendingFailure) {
+        const error = new Error("解码失败");
+        error.code = pendingFailure;
+        throw error;
+      }
+      activeDecodes += 1;
+      maxActiveDecodes = Math.max(maxActiveDecodes, activeDecodes);
+      try {
+        const total = framesFor(songId);
+        for (let index = 0; index < total; index += 1) {
+          if (signal?.aborted) {
+            const error = new Error("播放已中止");
+            error.code = "FFMPEG_ABORTED";
+            throw error;
+          }
+          await onFrame(new Int16Array(960).fill(Number(songId) * 1000 + index));
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return { framesDelivered: total };
+      } finally {
+        activeDecodes -= 1;
+      }
+    },
+    logger: {
+      error: (message) => logs.push(String(message)),
+      warn: (message) => logs.push(String(message)),
+      info: (message) => logs.push(String(message)),
+    },
+    scanIntervalMs: 60_000,
+    idlePauseMs,
+    backoffInitialMs: 5,
+    backoffMaxMs: 20,
+    djTransition: { ...DJ_TEST_OPTIONS, ...djOverrides },
+  });
+  return harness;
+}
+
+function range(base, from, count) {
+  return Array.from({ length: count }, (_, index) => base + from + index);
+}
+
+test("DJ 关闭时行为与当前版本完全一致：严格串行、无第二解码、无混音", async () => {
+  const h = makeDjHarness();
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  h.manager.kick("cs2");
+  await drain(h.manager);
+  assert.equal(h.maxActiveDecodes, 1);
+  assert.deepEqual(h.decodeOrder, ["1", "2"]);
+  assert.deepEqual(h.captured, [...range(1000, 0, 100), ...range(2000, 0, 100)]);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  h.db.close();
+});
+
+test("DJ 开启无下一首：正常播完，不启动第二个 FFmpeg", async () => {
+  const h = makeDjHarness();
+  djEnqueue(h.db, "user-a", [{ marker: 1 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager);
+  assert.deepEqual(h.decodeOrder, ["1"]);
+  assert.deepEqual(h.captured, range(1000, 0, 100));
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  h.db.close();
+});
+
+test("duration 无效时回退普通串行播放", async () => {
+  const h = makeDjHarness({ frameCounts: { 1: 50 } });
+  djEnqueue(h.db, "user-a", [{ marker: 1, durationMs: 0 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager);
+  assert.equal(h.maxActiveDecodes, 1);
+  assert.deepEqual(h.captured, [...range(1000, 0, 50), ...range(2000, 0, 100)]);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  h.db.close();
+});
+
+test("当前歌太短时回退普通串行播放，不强行切歌", async () => {
+  const h = makeDjHarness({ djOverrides: { minCurrentDurationMs: 500 } });
+  djEnqueue(h.db, "user-a", [{ marker: 1, durationMs: 300 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager);
+  assert.equal(h.maxActiveDecodes, 1);
+  assert.deepEqual(h.captured.slice(0, 30), range(1000, 0, 30));
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  h.db.close();
+});
+
+test("下一首准备成功并进入 crossfade：等功率混音 + 事务交接 + 不从头播放", async () => {
+  let handoverChecked = false;
+  let statusesAtTakeover = null;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 2013 && !handoverChecked) {
+        handoverChecked = true;
+        // 第一个纯新歌帧：交接事务必须已经完成且原子可见
+        statusesAtTakeover = {
+          old: statusOf(h2.db, "DJ歌-1"),
+          next: statusOf(h2.db, "DJ歌-2"),
+          startedAt: h2.db
+            .prepare("SELECT started_at FROM music_queue_items WHERE song_name = 'DJ歌-2'")
+            .get().started_at,
+        };
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager);
+
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  assert.deepEqual(h.decodeOrder, ["1", "2"]);
+  assert.equal(h.maxActiveDecodes, 2); // 仅重叠准备期短暂两路解码
+  assert.equal(h.sessionsCreated, 1); // 全程一个 LiveKit 发布会话
+  assert.equal(h.sessionsClosed, 1);
+
+  // 纯旧歌 89 帧
+  assert.deepEqual(h.captured.slice(0, 89), range(1000, 0, 89));
+  // 10 帧等功率混音：首帧 progress=0 → 完全等于旧歌帧
+  const mixed = h.captured.slice(89, 99);
+  assert.equal(mixed[0], 1089);
+  for (let k = 1; k < 10; k += 1) {
+    const gains = equalPowerGains(k / 10);
+    assert.equal(
+      mixed[k],
+      Math.round((1089 + k) * gains.oldGain + (2000 + k) * gains.newGain)
+    );
+  }
+  // ramp 3 帧后纯新歌从第 13 帧连续播到第 99 帧：绝不从头开始
+  const tail = h.captured.slice(99);
+  assert.equal(tail.length, 90);
+  assert.equal(tail[2], 2012); // ramp 末帧增益恰为 1.0
+  assert.deepEqual(tail.slice(3), range(2000, 13, 87));
+  assert.equal(h.captured.length, 189);
+
+  assert.equal(handoverChecked, true);
+  assert.deepEqual(
+    { old: statusesAtTakeover.old, next: statusesAtTakeover.next },
+    { old: "finished", next: "playing" }
+  );
+  assert.ok(Number.isSafeInteger(statusesAtTakeover.startedAt)); // 进度含淡化部分
+  h.db.close();
+});
+
+test("连环交接保持公平交替：A1→B1→A2→B2 全部 finished", async () => {
+  const h = makeDjHarness();
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 3 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }, { marker: 4 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.deepEqual(h.decodeOrder, ["1", "2", "3", "4"]);
+  for (const marker of [1, 2, 3, 4]) {
+    assert.equal(statusOf(h.db, `DJ歌-${marker}`), "finished");
+  }
+  assert.equal(h.sessionsCreated, 1);
+  assert.equal(h.captured[h.captured.length - 1], 4099); // 最后一首完整播到尾
+  assert.equal(h.activeDecodes, 0);
+  h.db.close();
+});
+
+test("reservation 失效（候选被取消）后重新选择，被取消歌曲绝不出声", async () => {
+  let cancelled = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1075 && !cancelled) {
+        cancelled = true;
+        cancelQueueItem(h2.db, {
+          channelId: "cs2",
+          queueItemId: itemIdOf(h2.db, 2),
+          principalKey: "user-b",
+        });
+      }
+      // 被取消的歌曲任何时刻都不允许进入 playing
+      assert.notEqual(statusOf(h2.db, "DJ歌-2"), "playing");
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 3 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "cancelled");
+  assert.equal(statusOf(h.db, "DJ歌-3"), "finished");
+  assert.equal(h.decodeOrder[0], "1");
+  assert.ok(h.decodeOrder.includes("3"));
+  assert.equal(h.activeDecodes, 0);
+  h.db.close();
+});
+
+test("置顶后候选重新验证：置顶歌曲插队播放", async () => {
+  let prioritized = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1075 && !prioritized) {
+        prioritized = true;
+        prioritizeQueueItem(h2.db, {
+          channelId: "cs2",
+          queueItemId: itemIdOf(h2.db, 3),
+        });
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 3 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  for (const marker of [1, 2, 3]) {
+    assert.equal(statusOf(h.db, `DJ歌-${marker}`), "finished");
+  }
+  // 置顶的 3 必须先于 2 播放
+  const startedAt = (marker) =>
+    h.db
+      .prepare("SELECT started_at FROM music_queue_items WHERE song_name = ?")
+      .get(`DJ歌-${marker}`).started_at;
+  assert.ok(startedAt(3) <= startedAt(2));
+  h.db.close();
+});
+
+test("随机播放后候选重新验证", async () => {
+  let shuffled = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1075 && !shuffled) {
+        shuffled = true;
+        // 强制交换 user-b 桶内顺序：候选从 2 变为 4
+        shufflePendingQueue(h2.db, {
+          channelId: "cs2",
+          randomIndex: () => 0,
+        });
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }, { marker: 4 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  for (const marker of [1, 2, 4]) {
+    assert.equal(statusOf(h.db, `DJ歌-${marker}`), "finished");
+  }
+  const startedAt = (marker) =>
+    h.db
+      .prepare("SELECT started_at FROM music_queue_items WHERE song_name = ?")
+      .get(`DJ歌-${marker}`).started_at;
+  assert.ok(startedAt(4) <= startedAt(2)); // 洗牌后 4 先播
+  h.db.close();
+});
+
+test("当前歌提前结束：新歌短时间拉满接管，不重复播放开头", async () => {
+  const h = makeDjHarness({ frameCounts: { 1: 95 } });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  // 89 纯旧 + 6 混音（旧歌 95 帧耗尽）+ 3 ramp + 91 纯新 = 189
+  assert.equal(h.captured.length, 189);
+  assert.equal(h.captured[h.captured.length - 1], 2099);
+  // 新歌帧严格递增（无重复、无从头）
+  const pureNew = h.captured.slice(98);
+  for (let index = 1; index < pureNew.length; index += 1) {
+    assert.ok(pureNew[index] > pureNew[index - 1]);
+  }
+  h.db.close();
+});
+
+test("当前歌比 duration_ms 更长：过渡完成后终止旧歌尾部", async () => {
+  const h = makeDjHarness({ frameCounts: { 1: 120 } });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 20 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-20"), "finished");
+  // 旧歌第 99~119 帧（值 1099~1119）在淡化结束后被切断，绝不再出声
+  assert.equal(
+    h.captured.some((value) => value >= 1099 && value <= 1119),
+    false
+  );
+  assert.equal(h.captured.length, 189);
+  assert.equal(h.captured[h.captured.length - 1], 20099);
+  h.db.close();
+});
+
+test("交叉淡化期间暂停/恢复：两路解码与过渡进度一起冻结", async () => {
+  let pausedOnce = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1089 && !pausedOnce) {
+        pausedOnce = true;
+        h2.manager.setPaused("cs2", true);
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+
+  // 等待暂停生效（首个混音帧推送后立即暂停）
+  const started = Date.now();
+  while (!pausedOnce && Date.now() - started < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.equal(pausedOnce, true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const frozenLength = h.captured.length;
+  const state = h.manager.getPlaybackState("cs2");
+  assert.equal(state.paused, true);
+  assert.equal(state.transitionState, "crossfading");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(h.captured.length, frozenLength); // 暂停期间零推送
+
+  h.manager.setPaused("cs2", false);
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  assert.equal(h.captured.length, 189); // 恢复后从同一过渡进度继续
+  h.db.close();
+});
+
+test("交叉淡化期间点下一首：旧歌立即结束标记 skipped，新歌快速拉满且不重播", async () => {
+  let skipIssued = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (h2.captured.length === 92 && !skipIssued) {
+        skipIssued = true;
+        h2.manager.skip("cs2").catch(() => {});
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(skipIssued, true);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "skipped");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  assert.equal(h.sessionsClosed, 1); // 淡化跳过不关闭发布会话（结束时才关）
+  // 89 纯旧 + 3 混音 + 3 ramp + 94 纯新 = 189；新歌从第 6 帧继续
+  assert.equal(h.captured.length, 189);
+  assert.deepEqual(h.captured.slice(95), range(2000, 6, 94));
+  h.db.close();
+});
+
+test("preparing 阶段清空队列：释放预取解码器，当前歌不受影响", async () => {
+  let clearedAt = 0;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1080 && !clearedAt) {
+        clearedAt = h2.captured.length;
+        clearPendingQueue(h2.db, { channelId: "cs2" });
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.ok(clearedAt > 0);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "cancelled");
+  assert.deepEqual(h.captured, range(1000, 0, 100)); // 无混音，旧歌完整播完
+  assert.equal(h.activeDecodes, 0); // 预取解码任务被取消释放
+  assert.equal(h.decodeOrder.length, 2); // 预取确实启动过
+  h.db.close();
+});
+
+test("关闭 DJ：预取立即取消，当前歌继续普通串行", async () => {
+  let toggledOff = false;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 1080 && !toggledOff) {
+        toggledOff = true;
+        setDjTransitionEnabled(h2.db, { channelId: "cs2", enabled: false });
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(toggledOff, true);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  // 关闭后无混音：帧序完全串行
+  assert.deepEqual(h.captured, [...range(1000, 0, 100), ...range(2000, 0, 100)]);
+  h.db.close();
+});
+
+test("无人频道退出：当前流与预取流全部释放，歌曲回到 pending 不丢失", async () => {
+  let present = true;
+  const h = makeDjHarness({
+    hasUsers: () => present,
+    idlePauseMs: 0,
+    onCapture: (value, h2) => {
+      if (value === 1080 && present) {
+        present = false;
+        h2.manager.scan();
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }]);
+  djEnqueue(h.db, "user-b", [{ marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(present, false);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "pending"); // requeue 恢复
+  assert.equal(statusOf(h.db, "DJ歌-2"), "pending"); // reservation 失效不丢歌
+  assert.equal(h.activeDecodes, 0);
+  assert.equal(h.sessionsClosed, h.sessionsCreated);
+  h.db.close();
+});
+
+test("淡化中服务停止：释放两路解码，双歌都安全回到 pending", async () => {
+  let stopPromise = null;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (h2.captured.length === 92 && !stopPromise) {
+        stopPromise = h2.manager.stop();
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.ok(stopPromise);
+  await stopPromise;
+  assert.equal(statusOf(h.db, "DJ歌-1"), "pending");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "pending");
+  assert.equal(h.activeDecodes, 0);
+  assert.equal(h.sessionsClosed, h.sessionsCreated);
+  h.db.close();
+});
+
+test("交接完成后服务停止：接管中的新歌由 worker 兜底放回 pending", async () => {
+  let stopPromise = null;
+  const h = makeDjHarness({
+    onCapture: (value, h2) => {
+      if (value === 2013 && !stopPromise) {
+        stopPromise = h2.manager.stop();
+      }
+    },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.ok(stopPromise);
+  await stopPromise;
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished"); // 交接前已正常结束
+  assert.equal(statusOf(h.db, "DJ歌-2"), "pending"); // 新歌被安全放回
+  assert.equal(h.activeDecodes, 0);
+  h.db.close();
+});
+
+test("下一首媒体失败：当前歌不受影响，随后串行按既有分类重试", async () => {
+  const h = makeDjHarness({
+    decodeFailures: { 2: ["MEDIA_FETCH_FAILED"] },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished"); // 串行重试成功
+  // 预取失败 → 当前歌完整串行播完（无混音帧）
+  assert.deepEqual(h.captured.slice(0, 100), range(1000, 0, 100));
+  assert.deepEqual(h.decodeOrder, ["1", "2", "2"]);
+  h.db.close();
+});
+
+test("下一首 FFmpeg 失败：退化串行且不重播当前歌", async () => {
+  const h = makeDjHarness({
+    decodeFailures: { 2: ["FFMPEG_START_FAILED"] },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "finished");
+  // 当前歌帧值 1000~1099 只出现一次：绝不重播
+  const firstSongFrames = h.captured.filter((value) => value >= 1000 && value < 2000);
+  assert.deepEqual(firstSongFrames, range(1000, 0, 100));
+  h.db.close();
+});
+
+test("下一首网易云登录失效：沿用既有 skipped 语义，日志不含敏感数据", async () => {
+  const h = makeDjHarness({
+    urlFailures: { 2: "NETEASE_PLAYBACK_SESSION_INVALID" },
+  });
+  djEnqueue(h.db, "user-a", [{ marker: 1 }, { marker: 2 }]);
+  setDjTransitionEnabled(h.db, { channelId: "cs2", enabled: true });
+  h.manager.kick("cs2");
+  await drain(h.manager, 5000);
+  assert.equal(statusOf(h.db, "DJ歌-1"), "finished");
+  assert.equal(statusOf(h.db, "DJ歌-2"), "skipped");
+  assert.deepEqual(h.captured, range(1000, 0, 100));
+  assert.ok(h.logs.length > 0);
+  for (const line of h.logs) {
+    assert.equal(line.includes("MUSIC_U"), false);
+    assert.equal(line.includes("http"), false);
+    assert.equal(line.includes("126.net"), false);
+    assert.equal(line.includes("user-a"), false);
+    assert.equal(line.includes("user-b"), false);
+  }
+  h.db.close();
+});
+
+test("DJ 全部场景不产生 unhandledRejection", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  process.removeListener("unhandledRejection", onUnhandledRejection);
+  assert.deepEqual(unhandledRejections, []);
 });
