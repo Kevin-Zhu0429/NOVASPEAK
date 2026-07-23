@@ -304,7 +304,7 @@ test("real clients preserve message validation, fragmentation, aggregation, and 
   member.send(secondPart, { fin: true, binary: false, compress: false });
   const updated = await updatedPromise;
   const player = updated.members.find((item) => item.nickname === "PLAYER01");
-  assert.equal(player.roleLabel, "成员");
+  assert.equal(player.roleLabel, "战队成员");
   assert.deepEqual(player.positions, ["member"]);
   assert.equal(player.channelId, "cs2");
   await waitFor(() => {
