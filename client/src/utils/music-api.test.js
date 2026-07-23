@@ -14,6 +14,7 @@ import {
   getNeteasePlaylistTracks,
   prioritizeChannelMusicQueueItem,
   searchNeteaseTracks,
+  setChannelDjTransition,
   setChannelMusicPaused,
   shuffleChannelMusicQueue,
   skipChannelMusicTrack,
@@ -490,4 +491,35 @@ test("错误对象不包含提交的 Cookie 内容", async () => {
     assert.ok(!dump.includes(secretValue));
     assert.ok(!dump.includes("cookies"));
   }
+});
+
+test("DJ 过渡开关：固定频道路由与参数校验", async () => {
+  const { calls, fetchImpl } = captureFetch(
+    jsonResponse(200, { success: true, djTransitionEnabled: true, revision: 7 })
+  );
+  const result = await setChannelDjTransition(
+    "http://api.test",
+    "频道/1",
+    true,
+    { fetchImpl }
+  );
+  assert.equal(result.djTransitionEnabled, true);
+  assert.equal(
+    calls[0].url,
+    "http://api.test/api/music/netease/channels/%E9%A2%91%E9%81%93%2F1/playback/dj-transition"
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { enabled: true });
+
+  await setChannelDjTransition("", "cs2", false, { fetchImpl });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { enabled: false });
+
+  await assert.rejects(
+    () => setChannelDjTransition("", "cs2", "yes", { fetchImpl }),
+    /DJ 过渡状态无效/
+  );
+  await assert.rejects(
+    () => setChannelDjTransition("", "", true, { fetchImpl }),
+    /频道无效/
+  );
 });

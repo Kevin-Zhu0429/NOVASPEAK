@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getChannelMusicQueue,
+  setChannelDjTransition,
   setChannelMusicPaused,
   skipChannelMusicTrack,
 } from "../utils/music-api";
@@ -112,13 +113,42 @@ export default function useChannelMusicStatus({ apiBase, channelId, enabled }) {
     }
   }, [apiBase, channelId, controlBusy, nowPlaying, refresh]);
 
+  const djTransitionEnabled = snapshot?.djTransition?.enabled === true;
+
+  const toggleDjTransition = useCallback(async () => {
+    if (controlBusy) return;
+    const nextEnabled = !djTransitionEnabled;
+    setControlBusy("dj");
+    try {
+      const result = await setChannelDjTransition(apiBase, channelId, nextEnabled);
+      if (!mountedRef.current) return;
+      setSnapshot((previous) => previous ? {
+        ...previous,
+        djTransition: {
+          ...(previous.djTransition || {}),
+          enabled: result.djTransitionEnabled === true,
+        },
+      } : previous);
+      setError("");
+    } catch (controlError) {
+      if (mountedRef.current) {
+        setError(controlError?.message || "切换 DJ 过渡失败");
+      }
+    } finally {
+      if (mountedRef.current) setControlBusy("");
+    }
+  }, [apiBase, channelId, controlBusy, djTransitionEnabled]);
+
   return {
     nowPlaying,
     progress,
     error,
     controlBusy,
     canControl: snapshot?.controls?.canControlPlayback === true,
+    djTransitionEnabled,
+    djTransitionState: snapshot?.djTransition?.transitionState || "idle",
     togglePaused,
+    toggleDjTransition,
     skip,
   };
 }

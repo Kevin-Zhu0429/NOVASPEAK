@@ -1,4 +1,4 @@
-// 音乐机器人管理器（Stage 5B v2 全新实现）。
+// 音乐机器人管理器（Stage 5B v2 + DJ 等功率交叉淡化）。
 //
 // 每频道一个 worker：
 //   有稳定听众 + 有 pending → 探测 FFmpeg → 公平 claim →
@@ -6,10 +6,25 @@
 //   媒体流 → FFmpeg 解码 → 逐帧 captureFrame → waitForPlayout →
 //   finished → 下一首；队列空 / 无听众 → 关闭会话离开。
 //
+// DJ 过渡（每频道开关，默认关闭）状态机——per-song runner：
+//   idle            worker 空闲 / 本歌曲不做过渡（DJ 关闭时恒为此态）
+//   playing         正常逐帧推送当前歌曲
+//   preparing_next  已锁定公平候选并把其解码预取进有界 PCM 缓冲
+//                   （内存 reservation：候选在数据库中保持 pending，
+//                   公平游标不动；服务重启 reservation 自然失效不丢歌）
+//   crossfading     等功率混音重叠期（旧歌 cos 淡出、新歌 sin 淡入）
+//   paused          control.paused=true，叠加在以上任何状态之上：
+//                   两路解码经背压一起冻结，过渡进度按帧数冻结
+//   stopping        skip / worker Abort / stop() 已触发，等待清理
+// 真正的队列状态迁移只发生在 handoverCrossfadeQueueItem 单事务里；
+// 同频道自始至终只有一个 Room / AudioSource / 已发布音轨。
+//
 // 错误分类：
 //   基础设施故障 → requeue（恢复公平游标）+ 退避（5s 起，60s 封顶），
 //   不快速领取后续歌曲；
 //   歌曲/账号明确不可用 → skipped；歌曲内容损坏 → failed。
+//   下一首预取失败不影响当前歌曲：候选保持 pending，退化为普通串行
+//   切换，由随后的正常 claim 走同一套分类。
 //
 // 铁律：任何音乐错误都不得影响 Express / Presence / 登录 / 语音；
 // 绝不 process.exit、绝不 server.close、绝不 presence.close、
@@ -27,11 +42,23 @@ import { loadNeteaseCredential } from "./library-service.js";
 import {
   claimNextQueueItem,
   finishQueueItem,
+  getQueueItemStatus,
+  handoverCrossfadeQueueItem,
   hasPendingItems,
+  isDjTransitionEnabled,
   listChannelsWithPending,
   markQueueItemPlaybackStarted,
+  peekNextQueueCandidate,
   requeueClaimedItem,
 } from "./music-queue.js";
+import {
+  PCM_FRAME_MS,
+  crossfadeProgress,
+  equalPowerGains,
+  mixFrames,
+  scaleFrame,
+} from "./crossfade-mixer.js";
+import { createPcmFrameBuffer } from "./pcm-frame-buffer.js";
 
 // 基础设施错误：requeue + 恢复游标 + 退避
 const INFRASTRUCTURE_CODES = new Set([
@@ -101,6 +128,32 @@ const DEFAULT_IDLE_PAUSE_MS = 120_000;
 const DEFAULT_BACKOFF_INITIAL_MS = 5_000;
 const DEFAULT_BACKOFF_MAX_MS = 60_000;
 
+/**
+ * DJ 过渡默认参数（测试可整体注入覆盖）。
+ * 帧长固定 10ms：预取缓冲上限 800 帧 = 8 秒 = 800 × 1920 字节 ≈ 1.5 MiB。
+ * 缓冲上限（8 秒）小于淡化时长（10 秒）是刻意的：就绪门槛取
+ * min(淡化帧数, 缓冲上限)，淡化期间下一首解码器持续实时补充。
+ */
+export const DJ_TRANSITION_DEFAULTS = Object.freeze({
+  crossfadeMs: 10_000,         // 交叉淡化重叠时长：10 秒 = 1000 帧
+  prepareLeadMs: 12_000,       // 预计剩余约 12 秒开始准备下一首
+  minCurrentDurationMs: 20_000, // 当前歌短于此值回退普通串行切换
+  minNextDurationMs: 10_000,   // 候选歌短于此值不作为淡化对象
+  prepBufferMaxFrames: 800,    // 有界预取缓冲：8 秒 PCM
+  rampMs: 300,                 // 跳过 / 提前结束时把新歌拉满的时长
+  checkIntervalFrames: 100,    // 每 1 秒重读开关与候选有效性
+});
+
+function abortPlaybackError() {
+  const error = new Error("音乐播放已中止");
+  error.code = "FFMPEG_ABORTED";
+  return error;
+}
+
+function isAbortCode(code) {
+  return code === "FFMPEG_ABORTED" || code === "MEDIA_ABORTED";
+}
+
 export function createMusicBotManager({
   db,
   neteaseClient,
@@ -117,10 +170,12 @@ export function createMusicBotManager({
   idlePauseMs = DEFAULT_IDLE_PAUSE_MS,
   backoffInitialMs = DEFAULT_BACKOFF_INITIAL_MS,
   backoffMaxMs = DEFAULT_BACKOFF_MAX_MS,
+  djTransition = {},
   now = () => Date.now(),
   logger = console,
 }) {
   const runtime = ffmpegRuntime || createFfmpegRuntime({ env });
+  const djOptions = { ...DJ_TRANSITION_DEFAULTS, ...djTransition };
   const workers = new Map(); // channelId -> { promise, abortController }
   const emptySinceByChannel = new Map();
   let stopped = false;
@@ -135,6 +190,7 @@ export function createMusicBotManager({
       totalPausedMs: 0,
       skipRequested: false,
       songAbortController: null,
+      transitionPhase: null,
       resumeWaiters: new Set(),
     };
   }
@@ -154,6 +210,7 @@ export function createMusicBotManager({
     control.totalPausedMs = 0;
     control.skipRequested = false;
     control.songAbortController = null;
+    control.transitionPhase = null;
   }
 
   function setControlPaused(control, paused) {
@@ -187,9 +244,21 @@ export function createMusicBotManager({
     }
   }
 
+  function controlTransitionState(control) {
+    if (control?.transitionPhase === "crossfading") return "crossfading";
+    if (control?.transitionPhase === "preparing") return "preparing";
+    return "idle";
+  }
+
   function getControlSnapshot(control) {
     if (!control?.queueItemId) {
-      return { active: false, queueItemId: null, paused: false, elapsedMs: 0 };
+      return {
+        active: false,
+        queueItemId: null,
+        paused: false,
+        elapsedMs: 0,
+        transitionState: "idle",
+      };
     }
     const referenceMs = control.paused && control.pausedAtMs !== null
       ? control.pausedAtMs
@@ -205,6 +274,7 @@ export function createMusicBotManager({
       queueItemId: String(control.queueItemId),
       paused: control.paused,
       elapsedMs,
+      transitionState: controlTransitionState(control),
     };
   }
 
@@ -259,6 +329,445 @@ export function createMusicBotManager({
     });
   }
 
+  /**
+   * 每首歌一个过渡 runner：封装预取 reservation、等功率混音与交接。
+   * DJ 关闭 / 歌曲不合格时 processFrame 与既有串行路径逐帧等价
+   * （仅多出常数次本地判断，绝不触碰第二个解码任务）。
+   */
+  function createTransitionRunner({
+    channelId,
+    item,
+    control,
+    session,
+    ffmpegPath,
+    abortOldDecode,
+    initialFramesCaptured = 0,
+  }) {
+    const durationMs = Math.max(0, Number(item.duration_ms) || 0);
+    const totalFramesEstimate = Math.floor(durationMs / PCM_FRAME_MS);
+    const crossfadeFrames = Math.max(
+      1,
+      Math.round(djOptions.crossfadeMs / PCM_FRAME_MS)
+    );
+    const prepareLeadFrames = Math.max(
+      crossfadeFrames + 1,
+      Math.round(djOptions.prepareLeadMs / PCM_FRAME_MS)
+    );
+    const rampFrames = Math.max(1, Math.round(djOptions.rampMs / PCM_FRAME_MS));
+    const checkIntervalFrames = Math.max(1, djOptions.checkIntervalFrames);
+    // duration_ms 只作预计结束时间；无效或太短一律回退普通串行播放
+    const currentEligible =
+      totalFramesEstimate > 0 && durationMs >= djOptions.minCurrentDurationMs;
+
+    const state = {
+      // 实际已推送帧数（唯一位置权威，含混音帧）；交接歌曲从淡化期间
+      // 已经播出的帧数起算，保证下一次过渡时机不漂移
+      framesCaptured: Math.max(0, initialFramesCaptured),
+      prep: null,        // { candidate, buffer, abortController, decodeResult }
+      fade: null,        // { framesMixed, totalFrames, newFramesCaptured, lastNewGain, lastOldGain }
+      restoreRamp: null, // 淡化中断后把旧歌平滑拉回全量
+      oldSongCut: false,
+      skipCut: false,
+      rejectedCandidateIds: new Set(),
+    };
+
+    function syncControlPhase() {
+      control.transitionPhase = state.fade
+        ? "crossfading"
+        : state.prep
+          ? "preparing"
+          : "playing";
+    }
+
+    function cancelPrep() {
+      const prep = state.prep;
+      if (!prep) return;
+      state.prep = null;
+      try {
+        prep.abortController.abort();
+      } catch {
+        // 预取清理失败不影响当前歌曲
+      }
+      prep.buffer.close();
+      syncControlPhase();
+    }
+
+    function prepReady(prep) {
+      // 就绪门槛不能超过缓冲上限（10 秒淡化 vs 8 秒缓冲）：
+      // 预热到上限即可开始，淡化期间解码器边播边补
+      const targetFrames = Math.min(
+        crossfadeFrames,
+        djOptions.prepBufferMaxFrames
+      );
+      return prep.buffer.size >= targetFrames || prep.buffer.ended;
+    }
+
+    function candidateStillValid(candidate) {
+      if (
+        getQueueItemStatus(db, {
+          channelId,
+          queueItemId: candidate.queueItemId,
+        }) !== "pending"
+      ) {
+        return false;
+      }
+      const head = peekNextQueueCandidate(db, { channelId });
+      return head !== null && head.queueItemId === candidate.queueItemId;
+    }
+
+    function startPrep(candidate) {
+      const abortController = new AbortController();
+      const buffer = createPcmFrameBuffer({
+        maxFrames: djOptions.prepBufferMaxFrames,
+      });
+      const prep = { candidate, abortController, buffer, decodeResult: null };
+      const task = (async () => {
+        // 候选歌曲只用候选点歌者自己的凭据；URL/Cookie 不出本函数作用域
+        const { cookie } = loadCredential(db, candidate.principalKey, env);
+        const { url } = await neteaseClient.getSongPlaybackUrl({
+          songId: candidate.songId,
+          cookie,
+        });
+        const mediaStream = await openMediaStream(url, {
+          signal: abortController.signal,
+        });
+        const byteLimit = createByteLimit();
+        return decodeToFrames({
+          ffmpegPath,
+          mediaStream,
+          byteLimit,
+          signal: abortController.signal,
+          env,
+          onFrame: async (frame) => {
+            const accepted = await buffer.push(frame);
+            if (!accepted) {
+              throw abortPlaybackError();
+            }
+          },
+        });
+      })();
+      // 统一转为已结算对象：预取失败绝不产生 unhandledRejection
+      prep.decodeResult = task.then(
+        (value) => {
+          buffer.markEnded();
+          return { ok: true, value };
+        },
+        (error) => {
+          buffer.fail(error);
+          return { ok: false, error };
+        }
+      );
+      return prep;
+    }
+
+    function maybeStartPrep() {
+      if (state.prep || state.fade || state.restoreRamp) return;
+      if (!currentEligible) return;
+      const remaining = totalFramesEstimate - state.framesCaptured;
+      if (remaining > prepareLeadFrames) return;
+      if (remaining <= crossfadeFrames) return; // 太晚：本次退化为串行
+      if (state.framesCaptured % checkIntervalFrames !== 0) return;
+      if (!isDjTransitionEnabled(db, channelId)) return;
+      const candidate = peekNextQueueCandidate(db, { channelId });
+      if (!candidate) return; // 无下一首：不启动第二个 FFmpeg
+      if (state.rejectedCandidateIds.has(candidate.queueItemId)) return;
+      if (candidate.durationMs < djOptions.minNextDurationMs) {
+        state.rejectedCandidateIds.add(candidate.queueItemId);
+        return;
+      }
+      state.prep = startPrep(candidate);
+      syncControlPhase();
+    }
+
+    function reviewPrep() {
+      const prep = state.prep;
+      if (!prep || state.fade) return;
+      if (state.framesCaptured % checkIntervalFrames !== 0) return;
+      if (prep.buffer.failed) {
+        // 预取失败：候选保持 pending，由随后的串行 claim 走既有分类；
+        // 当前歌曲继续播放，本次切换退化为普通切歌
+        state.rejectedCandidateIds.add(prep.candidate.queueItemId);
+        log("warn", "DJ 预取失败，本次切换退化为普通切歌", prep.buffer.failed);
+        cancelPrep();
+        return;
+      }
+      if (!isDjTransitionEnabled(db, channelId)) {
+        cancelPrep(); // 关闭 DJ：立即取消预取，当前歌曲继续
+        return;
+      }
+      if (!candidateStillValid(prep.candidate)) {
+        cancelPrep(); // 候选被取消/置顶/洗牌顶替：取消预取并重新选择
+      }
+    }
+
+    function maybeStartCrossfade() {
+      const prep = state.prep;
+      if (!prep || state.fade) return;
+      const remaining = totalFramesEstimate - state.framesCaptured;
+      if (remaining > crossfadeFrames) return;
+      if (prep.buffer.failed) return; // reviewPrep 下个周期清理
+      if (!prepReady(prep)) return; // 迟一点就绪就迟一点开始（缩短淡化）
+      if (!candidateStillValid(prep.candidate)) {
+        cancelPrep();
+        return;
+      }
+      // 正常淡化必须走满全部帧数，不因 duration_ms 误差压缩曲线：
+      // 旧歌只会因「混满全部帧」「实际 EOF」「跳过/清空/停止」终止。
+      // 旧歌若早于淡化走满而 EOF，走既有 300ms 平滑接管路径。
+      state.fade = {
+        framesMixed: 0,
+        totalFrames: crossfadeFrames,
+        newFramesCaptured: 0,
+        lastOldGain: 1,
+        lastNewGain: 0,
+      };
+      syncControlPhase();
+    }
+
+    function beginRestoreRamp() {
+      const fromGain = state.fade ? state.fade.lastOldGain : 1;
+      state.fade = null;
+      cancelPrep();
+      state.restoreRamp = {
+        fromGain,
+        framesDone: 0,
+        totalFrames: rampFrames,
+      };
+      syncControlPhase();
+    }
+
+    async function captureRestoreFrame(oldFrame) {
+      const ramp = state.restoreRamp;
+      const progress = Math.min(1, (ramp.framesDone + 1) / ramp.totalFrames);
+      const gain = ramp.fromGain + (1 - ramp.fromGain) * progress;
+      ramp.framesDone += 1;
+      await session.captureFrame(scaleFrame(oldFrame, gain));
+      if (ramp.framesDone >= ramp.totalFrames) {
+        state.restoreRamp = null;
+      }
+      return { oldDone: false };
+    }
+
+    async function captureCrossfadeFrame(oldFrame) {
+      const fade = state.fade;
+      const prep = state.prep;
+      // 已出声后周期性确认候选未被取消；取消则终止新歌、旧歌平滑回满
+      if (
+        fade.framesMixed > 0 &&
+        fade.framesMixed % checkIntervalFrames === 0 &&
+        getQueueItemStatus(db, {
+          channelId,
+          queueItemId: prep.candidate.queueItemId,
+        }) !== "pending"
+      ) {
+        beginRestoreRamp();
+        return captureRestoreFrame(oldFrame);
+      }
+      if (prep.buffer.failed || (prep.buffer.ended && prep.buffer.size === 0)) {
+        // 新歌中途失败或过短耗尽：撤销淡化，旧歌回到全量
+        if (prep.buffer.failed) {
+          log("warn", "DJ 淡化中预取中断，恢复当前歌曲", prep.buffer.failed);
+        }
+        beginRestoreRamp();
+        return captureRestoreFrame(oldFrame);
+      }
+      // 完整 0→1 曲线：首帧恰为 old=1/new=0，末帧恰为 old=0/new=1
+      const gains = equalPowerGains(
+        crossfadeProgress(fade.framesMixed, fade.totalFrames)
+      );
+      const newFrame = prep.buffer.take();
+      let outFrame;
+      if (newFrame) {
+        outFrame = mixFrames(oldFrame, newFrame, gains.oldGain, gains.newGain);
+        fade.framesMixed += 1;
+        fade.newFramesCaptured += 1;
+        fade.lastOldGain = gains.oldGain;
+        fade.lastNewGain = gains.newGain;
+      } else {
+        // 罕见 underrun（预取临时慢于实时）：冻结进度，只推旧歌
+        outFrame = scaleFrame(oldFrame, gains.oldGain);
+      }
+      await session.captureFrame(outFrame);
+      if (fade.framesMixed >= fade.totalFrames) {
+        // 淡化完成：旧歌增益已为 0，可以终止其剩余尾部
+        state.oldSongCut = true;
+        abortOldDecode();
+        return { oldDone: true };
+      }
+      return { oldDone: false };
+    }
+
+    return {
+      get oldSongCut() {
+        return state.oldSongCut;
+      },
+      get skipCut() {
+        return state.skipCut;
+      },
+      isCrossfading() {
+        return Boolean(state.fade);
+      },
+
+      /** 淡化期间管理员点了下一首：立即切断旧歌，finishOldSong 快速拉满新歌 */
+      requestSkipCut() {
+        if (!state.fade) return;
+        state.skipCut = true;
+        state.oldSongCut = true;
+        abortOldDecode();
+      },
+
+      /** 当前歌曲的每一帧都经过这里（串行 / 预取 / 混音统一入口） */
+      async processFrame(oldFrame) {
+        state.framesCaptured += 1;
+        if (state.oldSongCut) return { oldDone: true };
+        if (state.restoreRamp) return captureRestoreFrame(oldFrame);
+        if (!state.fade) {
+          maybeStartPrep();
+          reviewPrep();
+          maybeStartCrossfade();
+        }
+        if (state.fade) return captureCrossfadeFrame(oldFrame);
+        await session.captureFrame(oldFrame);
+        return { oldDone: false };
+      },
+
+      /**
+       * 旧歌解码结束后的收尾。
+       * 返回 { handedOver:false }（普通串行结束）或
+       * { handedOver:true, carried }（已事务交接，worker 下一轮接管新歌）。
+       */
+      async finishOldSong({ signal }) {
+        // 旧歌提前结束但候选已就绪且淡化未开始：短时间拉入新歌接管
+        if (
+          !state.fade &&
+          state.prep &&
+          !state.prep.buffer.failed &&
+          prepReady(state.prep) &&
+          !state.skipCut &&
+          isDjTransitionEnabled(db, channelId) &&
+          candidateStillValid(state.prep.candidate)
+        ) {
+          state.fade = {
+            framesMixed: 0,
+            totalFrames: 1,
+            newFramesCaptured: 0,
+            lastOldGain: 0,
+            lastNewGain: 0,
+          };
+          syncControlPhase();
+        }
+        if (!state.fade || !state.prep) {
+          return { handedOver: false };
+        }
+
+        const prep = state.prep;
+        const fade = state.fade;
+        // 走满的淡化终点已精确 old=0/new=1，无需任何补偿；300ms ramp
+        // 只用于提前接管：旧歌提前结束、淡化中跳过、旧歌结束后才就绪
+        const fadeCompleted = fade.framesMixed >= fade.totalFrames;
+        const fromGain = fade.lastNewGain;
+        const framesToRamp = fadeCompleted ? 0 : rampFrames;
+        try {
+          for (let index = 0; index < framesToRamp; index += 1) {
+            await waitWhilePaused(control, signal);
+            if (signal.aborted) throw abortPlaybackError();
+            const frame = await prep.buffer.pull();
+            if (frame === null) break;
+            const gain =
+              fromGain + (1 - fromGain) * ((index + 1) / framesToRamp);
+            await session.captureFrame(scaleFrame(frame, gain));
+            fade.newFramesCaptured += 1;
+          }
+        } catch (error) {
+          if (signal.aborted || isAbortCode(error?.code)) throw error;
+          // 新歌在拉满阶段失败：绝不重播旧歌，退化为普通串行切换，
+          // 候选保持 pending 由随后 claim 走既有分类
+          log("warn", "DJ 接管阶段预取中断，退化为普通切歌", error);
+          state.fade = null;
+          return { handedOver: false };
+        }
+
+        const handoverNow = now();
+        const startedAt =
+          handoverNow - fade.newFramesCaptured * PCM_FRAME_MS;
+        const receipt = handoverCrossfadeQueueItem(db, {
+          channelId,
+          currentQueueItemId: item.id,
+          nextQueueItemId: prep.candidate.queueItemId,
+          outcome: state.skipCut ? "skipped" : "finished",
+          startedAt,
+          now: handoverNow,
+        });
+        if (!receipt) {
+          // 候选在最后一刻被取消：停止新歌声音，退化为普通结束
+          state.fade = null;
+          return { handedOver: false };
+        }
+
+        // 所有权移交给 worker 下一轮迭代；cleanup 不再触碰这些资源
+        state.prep = null;
+        state.fade = null;
+        control.queueItemId = String(receipt.queueItem.id);
+        control.startedAtMs = startedAt;
+        control.paused = false;
+        control.pausedAtMs = null;
+        control.totalPausedMs = 0;
+        control.skipRequested = false;
+        control.transitionPhase = "playing";
+        return {
+          handedOver: true,
+          carried: {
+            receipt,
+            buffer: prep.buffer,
+            abortController: prep.abortController,
+            decodeResult: prep.decodeResult,
+            ffmpegPath,
+            controlStartedAtMs: startedAt,
+            framesAlreadyCaptured: fade.newFramesCaptured,
+          },
+        };
+      },
+
+      /** 清理未移交的预取资源（正常、错误、Abort 路径统一走到） */
+      cleanup() {
+        state.fade = null;
+        state.restoreRamp = null;
+        cancelPrep();
+      },
+    };
+  }
+
+  /**
+   * 消费交接来的歌曲：先读预取缓冲存量，再随解码任务实时推进。
+   * 绝不重新解码——「下一首转正后不会从头开始」由此保证。
+   */
+  async function consumeCarriedFrames({ carried, runner, control, signal }) {
+    const { buffer, decodeResult } = carried;
+    for (;;) {
+      await waitWhilePaused(control, signal);
+      if (signal.aborted) throw abortPlaybackError();
+      if (control.skipRequested) {
+        if (runner.isCrossfading()) {
+          runner.requestSkipCut();
+        } else {
+          throw abortPlaybackError();
+        }
+      }
+      if (runner.oldSongCut) break;
+      const frame = await buffer.pull(); // 解码失败时抛出既有稳定错误码
+      if (frame === null) break;
+      const { oldDone } = await runner.processFrame(frame);
+      if (oldDone) break;
+    }
+    const settled = await decodeResult;
+    if (
+      !settled.ok &&
+      !(runner.oldSongCut && isAbortCode(settled.error?.code))
+    ) {
+      throw settled.error;
+    }
+  }
+
   async function playOneSong({
     channelId,
     receipt,
@@ -266,16 +775,9 @@ export function createMusicBotManager({
     signal,
     sessionBox,
     control,
+    carried = null,
   }) {
     const item = receipt.queueItem;
-
-    // 点歌者自己的凭据：A 的歌只能用 A 的 Cookie
-    const { cookie } = loadCredential(db, item.principal_key, env);
-    const { url } = await neteaseClient.getSongPlaybackUrl({
-      songId: item.song_id,
-      cookie,
-    });
-    // URL / Cookie 只在本函数作用域中短暂存在，不写日志、不入库、不回传
 
     if (!sessionBox.session) {
       sessionBox.session = await createAudioSession({
@@ -288,42 +790,117 @@ export function createMusicBotManager({
     }
     const session = sessionBox.session;
 
-    const mediaStream = await openMediaStream(url, { signal });
-    const byteLimit = createByteLimit();
-    let playbackStarted = false;
-    await decodeToFrames({
+    // 旧歌解码专用 Abort：交叉淡化完成后单独切断旧歌尾部，
+    // 不影响歌曲级 signal（skip / worker 停止仍走歌曲级）
+    const oldDecodeAbort = carried
+      ? carried.abortController
+      : new AbortController();
+    const onSongAbort = () => {
+      try {
+        oldDecodeAbort.abort();
+      } catch {
+        // 清理路径失败不影响错误分类
+      }
+    };
+    if (signal.aborted) onSongAbort();
+    else signal.addEventListener("abort", onSongAbort, { once: true });
+
+    const runner = createTransitionRunner({
+      channelId,
+      item,
+      control,
+      session,
       ffmpegPath,
-      mediaStream,
-      byteLimit,
-      signal,
-      env,
-      onFrame: async (frame) => {
-        await waitWhilePaused(control, signal);
-        if (signal.aborted || control.skipRequested) {
-          const error = new Error("音乐播放已中止");
-          error.code = "FFMPEG_ABORTED";
-          throw error;
-        }
-        if (!playbackStarted) {
-          playbackStarted = true;
-          const startedAt = now();
-          control.startedAtMs = startedAt;
-          control.pausedAtMs = null;
-          control.totalPausedMs = 0;
-          markQueueItemPlaybackStarted(db, {
-            queueItemId: item.id,
-            now: startedAt,
-          });
-        }
-        await session.captureFrame(frame);
-      },
+      abortOldDecode: onSongAbort,
+      initialFramesCaptured: carried?.framesAlreadyCaptured ?? 0,
     });
-    if (control.skipRequested) {
-      const error = new Error("管理员已切换下一首");
-      error.code = "MUSIC_BOT_ADMIN_SKIP";
-      throw error;
+    control.transitionPhase = "playing";
+
+    let handoverResult = null;
+    try {
+      if (carried) {
+        await consumeCarriedFrames({ carried, runner, control, signal });
+      } else {
+        // 点歌者自己的凭据：A 的歌只能用 A 的 Cookie
+        const { cookie } = loadCredential(db, item.principal_key, env);
+        const { url } = await neteaseClient.getSongPlaybackUrl({
+          songId: item.song_id,
+          cookie,
+        });
+        // URL / Cookie 只在本函数作用域中短暂存在，不写日志、不入库、不回传
+
+        const mediaStream = await openMediaStream(url, {
+          signal: oldDecodeAbort.signal,
+        });
+        const byteLimit = createByteLimit();
+        let playbackStarted = false;
+        try {
+          await decodeToFrames({
+            ffmpegPath,
+            mediaStream,
+            byteLimit,
+            signal: oldDecodeAbort.signal,
+            env,
+            onFrame: async (frame) => {
+              await waitWhilePaused(control, signal);
+              if (signal.aborted) throw abortPlaybackError();
+              if (control.skipRequested) {
+                if (runner.isCrossfading()) {
+                  runner.requestSkipCut();
+                  return;
+                }
+                throw abortPlaybackError();
+              }
+              if (runner.oldSongCut) return; // 尾部已切割，丢弃残余帧
+              if (!playbackStarted) {
+                playbackStarted = true;
+                const startedAt = now();
+                control.startedAtMs = startedAt;
+                control.pausedAtMs = null;
+                control.totalPausedMs = 0;
+                markQueueItemPlaybackStarted(db, {
+                  queueItemId: item.id,
+                  now: startedAt,
+                });
+              }
+              await runner.processFrame(frame);
+            },
+          });
+        } catch (error) {
+          // 交叉淡化尾部切割触发的 Abort 属于正常完成，不是错误
+          if (!(runner.oldSongCut && isAbortCode(error?.code))) throw error;
+        }
+      }
+      if (control.skipRequested && !runner.skipCut) {
+        const error = new Error("管理员已切换下一首");
+        error.code = "MUSIC_BOT_ADMIN_SKIP";
+        throw error;
+      }
+      handoverResult = await runner.finishOldSong({ signal });
+    } finally {
+      signal.removeEventListener("abort", onSongAbort);
+      if (!handoverResult?.handedOver) {
+        runner.cleanup();
+        if (carried) {
+          try {
+            carried.abortController.abort();
+          } catch {
+            // 清理失败不影响错误分类
+          }
+          carried.buffer.close();
+          // decodeResult 是永不 reject 的已结算对象：等它收尾，
+          // 保证离开本函数时不残留仍在退出中的解码任务
+          await carried.decodeResult;
+        }
+      }
+    }
+
+    if (handoverResult.handedOver) {
+      control.songAbortController = handoverResult.carried.abortController;
+      return handoverResult;
     }
     await session.waitForPlayout();
+    return { handedOver: false };
   }
 
   async function closeSession(sessionBox) {
@@ -345,49 +922,68 @@ export function createMusicBotManager({
   ) {
     const signal = abortController.signal;
     let backoffMs = 0;
+    let carried = null; // 交接后由下一轮迭代接管的歌曲
 
     try {
       for (;;) {
         if (stopped || signal.aborted) break;
-        // 频道暂时无人时不领取下一首；保留 pending 并等待成员返回。
-        // 正在播放的歌曲由 scan 在持续空置达到阈值后 Abort/requeue。
-        if (!presenceService.hasUsersInChannel(channelId)) {
-          const emptySince = emptySinceByChannel.get(channelId) ?? now();
-          emptySinceByChannel.set(channelId, emptySince);
-          const remaining = Math.max(0, idlePauseMs - (now() - emptySince));
-          if (remaining === 0) break;
-          if (!(await abortableDelay(Math.min(scanIntervalMs, remaining), signal))) {
-            break;
+        if (!carried) {
+          // 频道暂时无人时不领取下一首；保留 pending 并等待成员返回。
+          // 正在播放的歌曲由 scan 在持续空置达到阈值后 Abort/requeue。
+          if (!presenceService.hasUsersInChannel(channelId)) {
+            const emptySince = emptySinceByChannel.get(channelId) ?? now();
+            emptySinceByChannel.set(channelId, emptySince);
+            const remaining = Math.max(0, idlePauseMs - (now() - emptySince));
+            if (remaining === 0) break;
+            if (!(await abortableDelay(Math.min(scanIntervalMs, remaining), signal))) {
+              break;
+            }
+            continue;
           }
-          continue;
+          emptySinceByChannel.delete(channelId);
+          if (!hasPendingItems(db, channelId)) break;
+        } else {
+          // 交接歌曲已经在数据库中为 playing 且解码进行中：
+          // 直接继续播放；无人频道的收尾仍由 scan Abort 统一处理
+          emptySinceByChannel.delete(channelId);
         }
-        emptySinceByChannel.delete(channelId);
-        if (!hasPendingItems(db, channelId)) break;
 
-        // 领取之前先探测解码器：失败则不 claim、队列保持 pending、退避
         let ffmpegPath;
-        try {
-          const probe = await runtime.probeFfmpeg();
-          ffmpegPath = probe.ffmpegPath;
-        } catch (error) {
-          log("error", "解码器不可用，暂停播放", error?.code);
-          backoffMs = backoffMs
-            ? Math.min(backoffMs * 2, backoffMaxMs)
-            : backoffInitialMs;
-          runtime.clearProbeCache?.();
-          if (!(await abortableDelay(backoffMs, signal))) break;
-          continue;
+        let receipt;
+        if (carried) {
+          ffmpegPath = carried.ffmpegPath;
+          receipt = carried.receipt;
+        } else {
+          // 领取之前先探测解码器：失败则不 claim、队列保持 pending、退避
+          try {
+            const probe = await runtime.probeFfmpeg();
+            ffmpegPath = probe.ffmpegPath;
+          } catch (error) {
+            log("error", "解码器不可用，暂停播放", error?.code);
+            backoffMs = backoffMs
+              ? Math.min(backoffMs * 2, backoffMaxMs)
+              : backoffInitialMs;
+            runtime.clearProbeCache?.();
+            if (!(await abortableDelay(backoffMs, signal))) break;
+            continue;
+          }
+
+          receipt = claimNextQueueItem(db, { channelId });
+          if (!receipt) break;
         }
 
-        const receipt = claimNextQueueItem(db, { channelId });
-        if (!receipt) break;
+        const activeCarried = carried;
+        carried = null;
 
         control.queueItemId = String(receipt.queueItem.id);
-        control.startedAtMs = null;
+        control.startedAtMs = activeCarried
+          ? activeCarried.controlStartedAtMs ?? now()
+          : null;
         control.paused = false;
         control.pausedAtMs = null;
         control.totalPausedMs = 0;
         control.skipRequested = false;
+        control.transitionPhase = "playing";
         const songAbortController = new AbortController();
         control.songAbortController = songAbortController;
         const abortSong = () => songAbortController.abort();
@@ -395,14 +991,21 @@ export function createMusicBotManager({
         else signal.addEventListener("abort", abortSong, { once: true });
 
         try {
-          await playOneSong({
+          const result = await playOneSong({
             channelId,
             receipt,
             ffmpegPath,
             signal: songAbortController.signal,
             sessionBox,
             control,
+            carried: activeCarried,
           });
+          if (result.handedOver) {
+            // 旧歌已在交接事务中 finished/skipped；新歌继续在下一轮播放
+            carried = result.carried;
+            backoffMs = 0;
+            continue;
+          }
           finishQueueItem(db, {
             queueItemId: receipt.queueItem.id,
             outcome: "finished",
@@ -458,6 +1061,32 @@ export function createMusicBotManager({
         }
       }
     } finally {
+      if (carried) {
+        // worker 退出（stop / 无人频道）时尚未接管的交接歌曲：
+        // 释放预取解码资源并放回队列原公平位置，绝不丢歌
+        try {
+          carried.abortController.abort();
+        } catch {
+          // 清理失败继续释放其余资源
+        }
+        try {
+          carried.buffer.close();
+        } catch {
+          // 清理失败继续释放其余资源
+        }
+        // 等待被中止的预取解码完全退出（已结算对象，绝不抛），
+        // 保证 stop() resolve 时不残留解码任务
+        await carried.decodeResult;
+        try {
+          requeueClaimedItem(db, {
+            queueItemId: carried.receipt.queueItem.id,
+            previousLastServedBucketOrder:
+              carried.receipt.previousLastServedBucketOrder,
+          });
+        } catch (error) {
+          log("error", "交接歌曲恢复失败", error?.code);
+        }
+      }
       await closeSession(sessionBox);
     }
   }
@@ -519,6 +1148,12 @@ export function createMusicBotManager({
     }
     control.skipRequested = true;
     setControlPaused(control, false);
+    if (control.transitionPhase === "crossfading") {
+      // DJ 淡化期间：不 Abort、不关会话——播放循环立即切断旧歌，
+      // 并在约 300ms 内把新歌平滑拉到 100% 后完成事务交接
+      wakePlaybackControl(control);
+      return { changed: true, ...getControlSnapshot(control) };
+    }
     control.songAbortController?.abort();
     // 立即关闭音频会话以清掉 AudioSource 内最多约 200ms 的残余缓冲；
     // worker 会在 catch 中把当前项标记 skipped，再创建新会话播放下一首。

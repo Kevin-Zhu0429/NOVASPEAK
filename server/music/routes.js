@@ -39,7 +39,9 @@ import {
   enqueueTracks,
   getQueueSnapshot,
   getRemainingQueueCapacity,
+  isDjTransitionEnabled,
   prioritizeQueueItem,
+  setDjTransitionEnabled,
   shufflePendingQueue,
 } from "./music-queue.js";
 
@@ -335,6 +337,16 @@ export function createNeteaseMusicRouter({
         (item) => item.requester.isCurrentUser === true
       ),
     };
+    // 只透出开关与过渡阶段；内部 reservation（候选 ID / principal /
+    // 游标）绝不进入任何响应
+    snapshot.djTransition = {
+      enabled: isDjTransitionEnabled(db, req.params.channelId),
+      transitionState:
+        state?.active === true &&
+        typeof state.transitionState === "string"
+          ? state.transitionState
+          : "idle",
+    };
     return snapshot;
   }
 
@@ -597,6 +609,37 @@ export function createNeteaseMusicRouter({
         });
       }
       return res.json({ success: true });
+    }
+  );
+
+  // DJ 过渡开关：管理员与战队成员可切换，访客只能查看；每频道持久化。
+  router.post(
+    "/channels/:channelId/playback/dj-transition",
+    requireInChannel,
+    requirePlaybackMember,
+    (req, res) => {
+      if (typeof req.body?.enabled !== "boolean") {
+        return res.status(400).json({
+          error: "DJ 过渡状态无效",
+          code: "MUSIC_DJ_TRANSITION_INVALID_STATE",
+        });
+      }
+      try {
+        const result = setDjTransitionEnabled(db, {
+          channelId: req.params.channelId,
+          enabled: req.body.enabled,
+        });
+        return res.json({
+          success: true,
+          djTransitionEnabled: result.enabled,
+          revision: result.revision,
+        });
+      } catch (error) {
+        const handled = sendNeteaseError(res, error);
+        if (handled) return handled;
+        console.error("Music DJ transition toggle error:", error?.message);
+        return res.status(500).json({ error: "切换 DJ 过渡失败" });
+      }
     }
   );
 
