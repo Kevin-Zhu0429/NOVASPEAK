@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { getMemberContextMenuModel, getMemberStatusBadges, getParticipantMenuActions } from "./voice-member-menu.js";
 
-const item = { id: "u2", isLocal: false, serverMuted: false };
+const item = { id: "u2", isLocal: false, serverMuted: false, role: "member" };
 const channels = [{ id: "a", name: "A" }, { id: "b", name: "B" }];
 const currentChannel = channels[0];
 
@@ -16,6 +16,28 @@ test("member menu contains move and remove only", () => {
 
 test("guest has no management menu", () => {
   assert.deepEqual(getParticipantMenuActions({ item, currentUser: { role: "guest" }, currentChannel, channels }), []);
+});
+
+test("ordinary user can move users and guests but not members or remove anyone", () => {
+  const ordinary = { role: "user" };
+  assert.deepEqual(getParticipantMenuActions({
+    item: { ...item, role: "user" },
+    currentUser: ordinary,
+    currentChannel,
+    channels,
+  }), ["move", "move:b"]);
+  assert.deepEqual(getParticipantMenuActions({
+    item: { ...item, role: "guest" },
+    currentUser: ordinary,
+    currentChannel,
+    channels,
+  }), ["move", "move:b"]);
+  assert.deepEqual(getParticipantMenuActions({
+    item,
+    currentUser: ordinary,
+    currentChannel,
+    channels,
+  }), []);
 });
 
 test("音乐机器人只保留本地听音控制，不显示移动或移出操作", () => {
