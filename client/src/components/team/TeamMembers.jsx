@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getPositionText } from "../../utils/user-display";
 import UserAvatar from "../common/UserAvatar";
+import { getRoleLabel } from "../../utils/roles";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -88,11 +89,13 @@ export default function TeamMembers({ onClose }) {
                   <div className="member-information">
                     <strong>{member.displayName}</strong>
                     <span>
-                      {getPositionText(member)}
+                      {member.role === "user"
+                        ? "普通语音用户"
+                        : getPositionText(member)}
                     </span>
                   </div>
                   <div className={member.role === "admin" ? "member-role captain" : "member-role"}>
-                    {member.role === "admin" ? "管理员" : "成员"}
+                    {getRoleLabel(member.role)}
                   </div>
                 </div>
               ))}
