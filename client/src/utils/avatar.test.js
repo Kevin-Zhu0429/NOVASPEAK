@@ -122,9 +122,10 @@ test("频道成员卡片：本人用 currentUser，其余用在线成员数据",
   assert.equal(resolveParticipantAvatarUrl(), null);
 });
 
-test("Admin / Member 可上传，Guest 不显示上传入口", () => {
+test("正式账号可上传，Guest 不显示上传入口", () => {
   assert.equal(getAvatarUploadUiModel({ role: "admin" }).showUploadEntry, true);
   assert.equal(getAvatarUploadUiModel({ role: "member" }).showUploadEntry, true);
+  assert.equal(getAvatarUploadUiModel({ role: "user" }).showUploadEntry, true);
   assert.equal(getAvatarUploadUiModel({ role: "guest" }).showUploadEntry, false);
   assert.equal(getAvatarUploadUiModel({ role: "guest" }).canUpload, false);
   assert.equal(getAvatarUploadUiModel({}).showUploadEntry, false);
