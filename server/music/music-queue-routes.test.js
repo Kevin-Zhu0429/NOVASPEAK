@@ -610,3 +610,93 @@ test("只有管理员可以清空频道待播队列", async () => {
     0
   );
 });
+
+// ---------- DJ 过渡开关 ----------
+
+test("DJ 过渡开关：Member/Admin 可切换、Guest 与未登录被拒、快照透出状态", async () => {
+  setUser("user-a", { role: "member", displayName: "普通成员" });
+  membership.set("user-a", "cs2");
+
+  // 默认关闭，快照带 djTransition 字段
+  let view = await api("GET", "/api/music/netease/channels/cs2/queue");
+  assert.equal(view.status, 200);
+  assert.deepEqual(view.json.djTransition, {
+    enabled: false,
+    transitionState: "idle",
+  });
+
+  // Member 开启
+  const on = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/dj-transition",
+    { enabled: true }
+  );
+  assert.equal(on.status, 200);
+  assert.equal(on.json.djTransitionEnabled, true);
+  assert.ok(Number.isSafeInteger(on.json.revision));
+  view = await api("GET", "/api/music/netease/channels/cs2/queue");
+  assert.equal(view.json.djTransition.enabled, true);
+
+  // 响应绝不泄露内部 reservation / 游标 / principal 信息
+  for (const banned of ["reservation", "principal", "bucket", "cursor", "MUSIC_U"]) {
+    assert.equal(view.text.includes(banned), false, `响应包含 ${banned}`);
+  }
+
+  // 非法 enabled 参数返回 400
+  for (const body of [{}, { enabled: "yes" }, { enabled: 1 }]) {
+    const bad = await api(
+      "POST",
+      "/api/music/netease/channels/cs2/playback/dj-transition",
+      body
+    );
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.code, "MUSIC_DJ_TRANSITION_INVALID_STATE");
+  }
+
+  // Admin 可关闭
+  setUser("admin-dj", { role: "admin", displayName: "管理员" });
+  membership.set("admin-dj", "cs2");
+  const off = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/dj-transition",
+    { enabled: false }
+  );
+  assert.equal(off.status, 200);
+  assert.equal(off.json.djTransitionEnabled, false);
+
+  // Guest 只能查看，不能切换
+  setUser("guest:dj-uuid", { role: "guest", displayName: "访客", isGuest: true });
+  membership.set("guest:dj-uuid", "cs2");
+  const guestToggle = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/dj-transition",
+    { enabled: true }
+  );
+  assert.equal(guestToggle.status, 403);
+  assert.equal(guestToggle.json.code, "MUSIC_PLAYBACK_FORBIDDEN");
+  const guestView = await api("GET", "/api/music/netease/channels/cs2/queue");
+  assert.equal(guestView.status, 200);
+  assert.equal(guestView.json.djTransition.enabled, false);
+
+  // 不在频道的成员按既有规则拒绝
+  setUser("user-out", { role: "member", displayName: "场外成员" });
+  membership.delete("user-out");
+  const outside = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/dj-transition",
+    { enabled: true }
+  );
+  assert.equal(outside.status, 403);
+  assert.equal(outside.json.code, "MUSIC_NOT_IN_CHANNEL");
+
+  // 未登录返回 401
+  authState.user = null;
+  const anonymous = await api(
+    "POST",
+    "/api/music/netease/channels/cs2/playback/dj-transition",
+    { enabled: true }
+  );
+  assert.equal(anonymous.status, 401);
+
+  setUser("user-a", { role: "member", displayName: "普通成员" });
+});

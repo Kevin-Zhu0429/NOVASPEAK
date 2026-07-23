@@ -226,6 +226,30 @@ export async function skipChannelMusicTrack(
 }
 
 /**
+ * 开启/关闭当前频道的 DJ 过渡（等功率交叉淡化切歌）。
+ * 管理员与正式成员可切换；访客只能查看。
+ */
+export async function setChannelDjTransition(
+  apiBase,
+  channelId,
+  enabled,
+  { fetchImpl } = {}
+) {
+  const encoded = requireChannelId(channelId);
+  if (typeof enabled !== "boolean") throw new Error("DJ 过渡状态无效");
+  return requestMusicApi(
+    apiBase,
+    `/api/music/netease/channels/${encoded}/playback/dj-transition`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+    { fetchImpl, fallbackError: enabled ? "开启 DJ 过渡失败" : "关闭 DJ 过渡失败" }
+  );
+}
+
+/**
  * 随机打乱频道中各用户桶内部的待播歌曲；服务端保留跨用户公平交替。
  */
 export async function shuffleChannelMusicQueue(

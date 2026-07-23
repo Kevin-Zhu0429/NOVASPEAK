@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Mic, MicOff, MoreHorizontal, Music, Pause, Play, Signal, SkipForward } from "lucide-react";
+import { Disc3, Mic, MicOff, MoreHorizontal, Music, Pause, Play, Signal, SkipForward } from "lucide-react";
 import { formatLoss, qualityLabel } from "../../utils/voice-network";
 import { formatArtists, formatTrackDuration } from "../../utils/music-format";
 import { getMemberStatusBadges } from "../../utils/voice-member-menu";
@@ -90,6 +90,17 @@ function VoiceParticipantCard({ item, receiveLoss, onlineMembers, currentUser, c
             </button>
             <button type="button" onClick={musicStatus.skip} disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)} title={musicStatus.canControl ? "下一首" : "访客不可控制"} aria-label="下一首">
               <SkipForward size={14} /><span>下一首</span>
+            </button>
+            <button
+              type="button"
+              className={musicStatus.djTransitionEnabled ? "music-dj-toggle music-dj-toggle-on" : "music-dj-toggle"}
+              onClick={musicStatus.toggleDjTransition}
+              disabled={!musicStatus.canControl || Boolean(musicStatus.controlBusy)}
+              aria-pressed={musicStatus.djTransitionEnabled}
+              title={!musicStatus.canControl ? "访客不可控制" : musicStatus.djTransitionState === "crossfading" ? "DJ 过渡进行中：两首歌正在交叉淡化" : musicStatus.djTransitionEnabled ? "已开启：切歌前 6 秒下一首淡入重叠（点击关闭）" : "已关闭：点击开启 DJ 交叉淡化切歌"}
+              aria-label={musicStatus.djTransitionEnabled ? "关闭 DJ 过渡" : "开启 DJ 过渡"}
+            >
+              <Disc3 size={14} /><span>DJ 过渡·{musicStatus.djTransitionEnabled ? "开" : "关"}</span>
             </button>
             {musicStatus.error && <em title={musicStatus.error}>控制状态异常</em>}
           </div>
