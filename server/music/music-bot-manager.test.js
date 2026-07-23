@@ -850,7 +850,9 @@ test("成员在空置期限内返回会取消暂停倒计时", async () => {
 // 帧值编码：marker*1000 + 帧序号（0 起）。10ms/帧；测试参数把
 // 交叉淡化压缩到 10 帧、准备提前量 30 帧、拉满 ramp 3 帧、逐帧复查。
 // 100 帧歌曲（durationMs=1000）的标准轨迹：
-//   纯旧歌 89 帧 → 等功率混音 10 帧 → 拉满 ramp 3 帧 → 纯新歌 87 帧。
+//   纯旧歌 89 帧 → 等功率混音 10 帧（progress = k/(N-1)，端点精确
+//   old=1/new=0 与 old=0/new=1）→ 纯新歌 90 帧 = 共 189 帧；
+//   300ms ramp 只出现在提前接管场景（旧歌提前结束 / 淡化中跳过）。
 
 const unhandledRejections = [];
 const onUnhandledRejection = (reason) => {
@@ -1073,7 +1075,7 @@ test("下一首准备成功并进入 crossfade：等功率混音 + 事务交接 
   let statusesAtTakeover = null;
   const h = makeDjHarness({
     onCapture: (value, h2) => {
-      if (value === 2013 && !handoverChecked) {
+      if (value === 2010 && !handoverChecked) {
         handoverChecked = true;
         // 第一个纯新歌帧：交接事务必须已经完成且原子可见
         statusesAtTakeover = {
@@ -1100,21 +1102,20 @@ test("下一首准备成功并进入 crossfade：等功率混音 + 事务交接 
 
   // 纯旧歌 89 帧
   assert.deepEqual(h.captured.slice(0, 89), range(1000, 0, 89));
-  // 10 帧等功率混音：首帧 progress=0 → 完全等于旧歌帧
+  // 10 帧等功率混音：progress = k/(N-1)，完整 0→1 曲线
   const mixed = h.captured.slice(89, 99);
-  assert.equal(mixed[0], 1089);
+  assert.equal(mixed[0], 1089); // 起点 oldGain=1、newGain=0：恰为纯旧歌帧
   for (let k = 1; k < 10; k += 1) {
-    const gains = equalPowerGains(k / 10);
+    const gains = equalPowerGains(k / 9);
     assert.equal(
       mixed[k],
       Math.round((1089 + k) * gains.oldGain + (2000 + k) * gains.newGain)
     );
   }
-  // ramp 3 帧后纯新歌从第 13 帧连续播到第 99 帧：绝不从头开始
+  assert.equal(mixed[9], 2009); // 终点 oldGain=0、newGain=1：恰为纯新歌帧
+  // 走满的淡化无需 ramp：交接后纯新歌从第 10 帧连续播到第 99 帧
   const tail = h.captured.slice(99);
-  assert.equal(tail.length, 90);
-  assert.equal(tail[2], 2012); // ramp 末帧增益恰为 1.0
-  assert.deepEqual(tail.slice(3), range(2000, 13, 87));
+  assert.deepEqual(tail, range(2000, 10, 90));
   assert.equal(h.captured.length, 189);
 
   assert.equal(handoverChecked, true);

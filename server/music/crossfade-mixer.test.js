@@ -4,6 +4,7 @@ import {
   INT16_MAX,
   INT16_MIN,
   PCM_FRAME_MS,
+  crossfadeProgress,
   equalPowerGains,
   mixFrames,
   scaleFrame,
@@ -56,6 +57,32 @@ test("总功率在容差内稳定：oldGain² + newGain² ≈ 1", () => {
     const power = oldGain * oldGain + newGain * newGain;
     assert.ok(Math.abs(power - 1) < 1e-9, `progress=${step / 100} 功率漂移`);
   }
+});
+
+test("crossfadeProgress：600 帧生产淡化覆盖完整 0→1 闭区间", () => {
+  assert.equal(crossfadeProgress(0, 600), 0);
+  assert.equal(crossfadeProgress(599, 600), 1);
+  const first = equalPowerGains(crossfadeProgress(0, 600));
+  assert.equal(first.oldGain, 1); // 首个混音帧：old=1
+  assert.equal(first.newGain, 0); //             new=0
+  const last = equalPowerGains(crossfadeProgress(599, 600));
+  assert.ok(Math.abs(last.oldGain) < 1e-12); // 末个混音帧：old=0
+  assert.equal(last.newGain, 1); //              new=1
+  let previous = -1;
+  for (let frame = 0; frame < 600; frame += 1) {
+    const progress = crossfadeProgress(frame, 600);
+    assert.ok(progress >= previous); // 单调不减
+    previous = progress;
+  }
+});
+
+test("crossfadeProgress：短淡化端点与退化输入", () => {
+  assert.equal(crossfadeProgress(0, 10), 0);
+  assert.equal(crossfadeProgress(9, 10), 1);
+  assert.equal(crossfadeProgress(0, 1), 1); // 单帧淡化直接取终点
+  assert.equal(crossfadeProgress(5, 1), 1);
+  assert.equal(crossfadeProgress(-3, 10), 0); // 非法帧序夹取到起点
+  assert.equal(crossfadeProgress(99, 10), 1); // 超界夹取到终点
 });
 
 // ---------- 混音 ----------

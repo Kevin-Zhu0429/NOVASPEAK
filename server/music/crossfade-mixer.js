@@ -17,6 +17,18 @@ export const INT16_MAX = 32767;
 export const PCM_FRAME_MS = 10;
 
 /**
+ * 正常交叉淡化的逐帧 progress：第 frameIndex 个混音帧（0 起）在共
+ * totalFrames 帧的淡化里映射到 [0, 1] 完整闭区间——
+ * 首帧恰为 0（old=1/new=0），末帧恰为 1（old=0/new=1）。
+ * totalFrames <= 1 的退化淡化直接取终点 1。
+ */
+export function crossfadeProgress(frameIndex, totalFrames) {
+  if (!Number.isInteger(totalFrames) || totalFrames <= 1) return 1;
+  if (!Number.isInteger(frameIndex) || frameIndex <= 0) return 0;
+  return Math.min(1, frameIndex / (totalFrames - 1));
+}
+
+/**
  * 等功率交叉淡化增益。progress ∈ [0, 1]（自动夹取）：
  * 0 → oldGain=1, newGain=0；1 → oldGain=0, newGain=1。
  */

@@ -53,6 +53,7 @@ import {
 } from "./music-queue.js";
 import {
   PCM_FRAME_MS,
+  crossfadeProgress,
   equalPowerGains,
   mixFrames,
   scaleFrame,
@@ -559,7 +560,10 @@ export function createMusicBotManager({
         beginRestoreRamp();
         return captureRestoreFrame(oldFrame);
       }
-      const gains = equalPowerGains(fade.framesMixed / fade.totalFrames);
+      // 完整 0→1 曲线：首帧恰为 old=1/new=0，末帧恰为 old=0/new=1
+      const gains = equalPowerGains(
+        crossfadeProgress(fade.framesMixed, fade.totalFrames)
+      );
       const newFrame = prep.buffer.take();
       let outFrame;
       if (newFrame) {
@@ -647,9 +651,11 @@ export function createMusicBotManager({
 
         const prep = state.prep;
         const fade = state.fade;
-        // 把新歌从当前增益平滑拉到 100%（走满淡化时增益已是 1，零帧补偿）
+        // 走满的淡化终点已精确 old=0/new=1，无需任何补偿；300ms ramp
+        // 只用于提前接管：旧歌提前结束、淡化中跳过、旧歌结束后才就绪
+        const fadeCompleted = fade.framesMixed >= fade.totalFrames;
         const fromGain = fade.lastNewGain;
-        const framesToRamp = fromGain >= 0.999 ? 0 : rampFrames;
+        const framesToRamp = fadeCompleted ? 0 : rampFrames;
         try {
           for (let index = 0; index < framesToRamp; index += 1) {
             await waitWhilePaused(control, signal);
