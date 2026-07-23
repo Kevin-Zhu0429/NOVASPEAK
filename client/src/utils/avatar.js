@@ -69,7 +69,7 @@ export function getAvatarUploadUiModel({
   avatarUrl = null,
   uploading = false,
 } = {}) {
-  const canUpload = role === "admin" || role === "member";
+  const canUpload = role === "admin" || role === "member" || role === "user";
   const hasAvatar = normalizeAvatarUrl(avatarUrl) !== null;
   return {
     canUpload,
