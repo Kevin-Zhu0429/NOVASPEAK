@@ -3,12 +3,16 @@ import { MoreHorizontal } from "lucide-react";
 import { getPresenceDeviceText, getPresenceLocationText, getPresencePositionText } from "../../utils/presence-display";
 import UserAvatar from "../common/UserAvatar";
 import OnlineMemberContextMenu from "./OnlineMemberContextMenu";
+import { getUserManagementCapabilities } from "../../utils/roles";
 
 function OnlineMemberCard({ member, currentUser, channels, busy, onMove, onKick }) {
   const [contextMenu, setContextMenu] = useState(null);
   const buttonRef = useRef(null);
   const deviceText = getPresenceDeviceText(member);
-  const canManage = !member.isCurrentUser && ["admin", "member"].includes(currentUser?.role);
+  const capabilities = getUserManagementCapabilities(currentUser?.role, member.role);
+  const canManage =
+    !member.isCurrentUser &&
+    (capabilities.canMove || capabilities.canRemove);
   const openMenu = (event) => {
     if (!canManage) return;
     event.preventDefault();
