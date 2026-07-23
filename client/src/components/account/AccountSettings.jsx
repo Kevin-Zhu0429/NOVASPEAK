@@ -289,7 +289,11 @@ export default function AccountSettings({
   }
 
   const roleName =
-    accountUser?.role === "admin" ? "管理员" : "战队成员";
+    accountUser?.role === "admin"
+      ? "管理员"
+      : accountUser?.role === "member"
+        ? "战队成员"
+        : "普通语音用户";
   const positionSummary = getPositionText(accountUser);
   const avatarUi = getAvatarUploadUiModel({
     role: accountUser?.role,
@@ -304,7 +308,7 @@ export default function AccountSettings({
           <div>
             <div className="management-label">NOVA GAMING</div>
             <h2>我的账号</h2>
-            <p>管理你的正式成员账号信息</p>
+            <p>管理你的正式账号信息</p>
           </div>
           <button
             type="button"
