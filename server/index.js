@@ -20,8 +20,10 @@ import {
   getCurrentUser,
   requireAdmin,
   requireAuthenticated,
+  requireChannelManager,
   requireMember,
   requireRegistered,
+  revokeOtherLoginSessions,
   toPublicUser
 } from "./auth-session.js";
 import {
@@ -62,6 +64,12 @@ import {
   resolveDesktopUpdateDirectory,
   setDesktopUpdateResponseHeaders,
 } from "./desktop-updates.js";
+import {
+  createRegistrationLimiter,
+  isRegistrationEnabled,
+  normalizeRegistrationInput,
+} from "./registration.js";
+import { FORMAL_ROLES } from "./authorization.js";
 
 dotenv.config();
 
@@ -86,6 +94,7 @@ const desktopUpdateDirectory = resolveDesktopUpdateDirectory({
 });
 
 const app = express();
+const registrationLimiter = createRegistrationLimiter();
 
 // Cloudflare Tunnel 通过本机回环地址连接 Express
 app.set("trust proxy", "loopback");
@@ -427,6 +436,76 @@ app.post("/api/auth/member-login",
   }
 );
 
+app.post("/api/auth/register",
+  async (req, res) => {
+    try {
+      if (!isRegistrationEnabled(process.env)) {
+        return res.status(403).json({
+          error: "账号注册暂未开放",
+          code: "REGISTRATION_DISABLED",
+        });
+      }
+
+      const limit = registrationLimiter.check(req.ip);
+      if (!limit.allowed) {
+        res.set("Retry-After", String(limit.retryAfterSeconds));
+        return res.status(429).json({
+          error: "注册尝试过于频繁，请稍后再试",
+          code: "REGISTRATION_RATE_LIMITED",
+        });
+      }
+
+      const normalized = normalizeRegistrationInput(req.body);
+      if (normalized.error) {
+        return res.status(400).json({ error: normalized.error });
+      }
+      if (RESERVED_GUEST_NICKNAMES.has(normalized.usernameKey)) {
+        return res.status(400).json({
+          error: "该用户名为系统保留名称，请更换用户名",
+        });
+      }
+
+      const duplicate = db.prepare(`
+        SELECT id FROM users WHERE username_key = ?
+      `).get(normalized.usernameKey);
+      if (duplicate) {
+        return res.status(409).json({ error: "该用户名已被使用" });
+      }
+
+      const user = {
+        id: randomUUID(),
+        username: normalized.username,
+        usernameKey: normalized.usernameKey,
+        displayName: normalized.username,
+        passwordHash: await hashPassword(normalized.password),
+        createdAt: Date.now(),
+      };
+      db.prepare(`
+        INSERT INTO users (
+          id, username, username_key, display_name, password_hash,
+          role, position, created_at
+        )
+        VALUES (
+          @id, @username, @usernameKey, @displayName, @passwordHash,
+          'user', 'member', @createdAt
+        )
+      `).run(user);
+
+      return res.status(201).json({
+        success: true,
+        message: "注册成功，请返回登录",
+        user: toPublicUser(getAccountUser(user.id)),
+      });
+    } catch (error) {
+      if (error?.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return res.status(409).json({ error: "该用户名已被使用" });
+      }
+      console.error("Register account error:", error);
+      return res.status(500).json({ error: "注册失败，请稍后重试" });
+    }
+  }
+);
+
 app.post("/api/auth/guest-login",
   (req, res) => {
     try {
@@ -697,6 +776,7 @@ app.patch("/api/account/me/password",
         SET password_hash = ?
         WHERE id = ?
       `).run(passwordHash, user.id);
+      revokeOtherLoginSessions(user.id, req);
 
       res.json({
         success: true,
@@ -880,7 +960,7 @@ app.get("/api/channels", requireAuthenticated, (req, res) => {
   }
 });
 
-app.post("/api/channels", requireRegistered, (req, res) => {
+app.post("/api/channels", requireChannelManager, (req, res) => {
   try {
     const normalized = normalizeChannelName(req.body?.name);
     if (normalized.error) return res.status(400).json({ error: normalized.error });
@@ -1387,6 +1467,12 @@ app.put("/api/admin/members/:memberId/positions",
         });
       }
 
+      if (member.role === "user") {
+        return res.status(409).json({
+          error: "普通用户没有战队职位",
+        });
+      }
+
       const requestedPositions = req.body?.positions;
 
       if (!Array.isArray(requestedPositions)) {
@@ -1445,6 +1531,135 @@ app.put("/api/admin/members/:memberId/positions",
       res.status(500).json({
         error: "修改成员职位失败",
       });
+    }
+  }
+);
+
+app.patch("/api/admin/members/:memberId/role",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const member = getAccountUser(req.params.memberId);
+      const nextRole = req.body?.role;
+
+      if (!member) {
+        return res.status(404).json({ error: "正式账号不存在" });
+      }
+      if (!FORMAL_ROLES.includes(nextRole)) {
+        return res.status(400).json({
+          error: "账号权限只能设为管理员、战队成员或普通用户",
+        });
+      }
+      if (member.id === req.authUser.id) {
+        return res.status(400).json({
+          error: "不能在战队管理中修改自己的账号权限",
+        });
+      }
+      if (member.role === nextRole) {
+        return res.json({
+          success: true,
+          member: toManagedMember(member),
+          message: "账号权限没有变化",
+        });
+      }
+      if (member.role === "admin") {
+        const adminCount = db.prepare(`
+          SELECT COUNT(*) AS count FROM users WHERE role = 'admin'
+        `).get().count;
+        if (adminCount <= 1) {
+          return res.status(409).json({
+            error: "系统必须至少保留一个管理员",
+          });
+        }
+      }
+
+      const changeRole = db.transaction(() => {
+        db.prepare("UPDATE users SET role = ? WHERE id = ?")
+          .run(nextRole, member.id);
+
+        if (nextRole === "user") {
+          db.prepare("DELETE FROM user_positions WHERE user_id = ?")
+            .run(member.id);
+          db.prepare("UPDATE users SET position = 'member' WHERE id = ?")
+            .run(member.id);
+        } else {
+          if (nextRole === "member") {
+            db.prepare(`
+              DELETE FROM user_positions
+              WHERE user_id = ? AND position = 'captain'
+            `).run(member.id);
+          }
+          const positionCount = db.prepare(`
+            SELECT COUNT(*) AS count FROM user_positions WHERE user_id = ?
+          `).get(member.id).count;
+          if (positionCount === 0) {
+            const defaultPosition =
+              nextRole === "admin" ? "captain" : "member";
+            db.prepare(`
+              INSERT INTO user_positions (user_id, position)
+              VALUES (?, ?)
+            `).run(member.id, defaultPosition);
+          } else if (nextRole === "admin") {
+            db.prepare(`
+              INSERT OR IGNORE INTO user_positions (user_id, position)
+              VALUES (?, 'captain')
+            `).run(member.id);
+          }
+          const primaryPosition = db.prepare(`
+            SELECT position FROM user_positions
+            WHERE user_id = ?
+            ORDER BY CASE position
+              WHEN 'captain' THEN 1
+              WHEN 'commander' THEN 2
+              WHEN 'entry' THEN 3
+              WHEN 'sniper' THEN 4
+              WHEN 'support' THEN 5
+              WHEN 'rifler' THEN 6
+              WHEN 'freeman' THEN 7
+              WHEN 'backup' THEN 8
+              ELSE 9
+            END
+            LIMIT 1
+          `).get(member.id)?.position || "member";
+          db.prepare("UPDATE users SET position = ? WHERE id = ?")
+            .run(primaryPosition, member.id);
+        }
+
+        db.prepare(`
+          INSERT INTO role_change_audit (
+            actor_user_id, actor_display_name,
+            target_user_id, target_display_name,
+            previous_role, next_role, created_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          req.authUser.id,
+          req.authUser.displayName || req.authUser.nickname,
+          member.id,
+          member.display_name || member.username,
+          member.role,
+          nextRole,
+          Date.now()
+        );
+        db.prepare("DELETE FROM sessions WHERE user_id = ?").run(member.id);
+        return getAccountUser(member.id);
+      });
+
+      const updatedMember = changeRole();
+      presence.disconnectRegisteredUser?.(member.id, {
+        type: "voice_control",
+        action: "force_logout",
+        reason: "role_changed",
+      });
+
+      return res.json({
+        success: true,
+        member: toManagedMember(updatedMember),
+        message: "账号权限已更新，目标用户需要重新登录",
+      });
+    } catch (error) {
+      console.error("Admin update member role error:", error);
+      return res.status(500).json({ error: "修改账号权限失败" });
     }
   }
 );

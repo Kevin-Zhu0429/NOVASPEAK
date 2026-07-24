@@ -1,14 +1,24 @@
+import { getUserManagementCapabilities } from "./roles.js";
+
 export function getParticipantMenuActions({ item, currentUser, currentChannel, channels = [] }) {
-  const canManage = !item?.isLocal && ["admin", "member"].includes(currentUser?.role);
+  const permissions = getUserManagementCapabilities(
+    currentUser?.role,
+    item?.role
+  );
+  const canManage =
+    !item?.isLocal &&
+    (permissions.canMove || permissions.canRemove || permissions.canServerMute);
   // 音乐机器人被移出后会中断整个频道的播放。保留本地音量/静音，
   // 但不向普通成员菜单提供服务器静音、移动或移出操作。
   if (!canManage || item?.isMusicBot === true) return [];
   const actions = [];
-  if (currentUser?.role === "admin") actions.push(item?.serverMuted ? "unmute" : "mute");
-  actions.push("move");
-  const currentChannelId = currentChannel?.id;
-  actions.push(...channels.filter((channel) => channel?.id !== currentChannelId).map((channel) => `move:${channel.id}`));
-  actions.push("remove");
+  if (permissions.canServerMute) actions.push(item?.serverMuted ? "unmute" : "mute");
+  if (permissions.canMove) {
+    actions.push("move");
+    const currentChannelId = currentChannel?.id;
+    actions.push(...channels.filter((channel) => channel?.id !== currentChannelId).map((channel) => `move:${channel.id}`));
+  }
+  if (permissions.canRemove) actions.push("remove");
   return actions;
 }
 

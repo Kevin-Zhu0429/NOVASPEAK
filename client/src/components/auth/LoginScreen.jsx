@@ -14,6 +14,11 @@ export default function LoginScreen({ onLogin }) {
   const [guestLoading, setGuestLoading] =
     useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [registerMode, setRegisterMode] = useState(false);
+  const [registerUsername, setRegisterUsername] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
   const [showGuestLogin, setShowGuestLogin] =
     useState(false);
   const [guestNickname, setGuestNickname] =
@@ -193,6 +198,46 @@ export default function LoginScreen({ onLogin }) {
     }
   }
 
+  async function handleRegistration(event) {
+    event.preventDefault();
+    const username = registerUsername.normalize("NFKC").trim();
+    if (registerPassword !== registerConfirmPassword) {
+      setError("两次输入的密码不一致");
+      return;
+    }
+    try {
+      setLoading(true);
+      setError("");
+      setSuccess("");
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username,
+          password: registerPassword,
+        }),
+      });
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error("服务器注册接口返回异常");
+      }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "注册失败");
+      setNickname(username);
+      setPassword("");
+      setRegisterPassword("");
+      setRegisterConfirmPassword("");
+      setRegisterMode(false);
+      setSuccess("注册成功，请使用新账号登录");
+    } catch (registrationError) {
+      console.error("NovaSpeak 注册失败：", registrationError);
+      setError(registrationError.message || "注册失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="nova-login-page">
       <div className="nova-login-container">
@@ -211,7 +256,9 @@ export default function LoginScreen({ onLogin }) {
         <form
           className="nova-member-login-card"
           onSubmit={
-            showGuestLogin
+            registerMode
+              ? handleRegistration
+              : showGuestLogin
               ? handleGuestLogin
               : handleMemberLogin
           }
@@ -220,24 +267,29 @@ export default function LoginScreen({ onLogin }) {
             NOVA GAMING
           </div>
 
-          <h2>战队成员登录</h2>
+          <h2>{registerMode ? "注册普通用户" : "账号登录"}</h2>
 
           <p className="login-description">
-            使用游戏昵称和密码进入语音系统
+            {registerMode
+              ? "创建普通语音用户账号，注册后返回登录"
+              : "使用用户名和密码进入语音系统"}
           </p>
 
           <label className="login-field">
-            <span>游戏昵称</span>
+            <span>用户名</span>
 
             <input
               type="text"
-              value={nickname}
+              value={registerMode ? registerUsername : nickname}
               onChange={(event) =>
-                setNickname(event.target.value)
+                registerMode
+                  ? setRegisterUsername(event.target.value)
+                  : setNickname(event.target.value)
               }
               placeholder="例如：CHILLILY"
               autoComplete="username"
-              maxLength={30}
+              minLength={registerMode ? 2 : undefined}
+              maxLength={registerMode ? 24 : 30}
               disabled={loading}
             />
           </label>
@@ -247,16 +299,35 @@ export default function LoginScreen({ onLogin }) {
 
             <input
               type="password"
-              value={password}
+              value={registerMode ? registerPassword : password}
               onChange={(event) =>
-                setPassword(event.target.value)
+                registerMode
+                  ? setRegisterPassword(event.target.value)
+                  : setPassword(event.target.value)
               }
-              placeholder="请输入登录密码"
-              autoComplete="current-password"
+              placeholder={registerMode ? "设置 8—128 位密码" : "请输入登录密码"}
+              autoComplete={registerMode ? "new-password" : "current-password"}
+              minLength={registerMode ? 8 : undefined}
               maxLength={128}
               disabled={loading}
             />
           </label>
+
+          {registerMode && (
+            <label className="login-field">
+              <span>确认密码</span>
+              <input
+                type="password"
+                value={registerConfirmPassword}
+                onChange={(event) => setRegisterConfirmPassword(event.target.value)}
+                placeholder="再次输入密码"
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
+                disabled={loading}
+              />
+            </label>
+          )}
 
           {error && (
             <div
@@ -266,6 +337,9 @@ export default function LoginScreen({ onLogin }) {
               {error}
             </div>
           )}
+          {success && (
+            <div className="login-success" role="status">{success}</div>
+          )}
 
           <button
             type="submit"
@@ -273,17 +347,17 @@ export default function LoginScreen({ onLogin }) {
             disabled={loading}
           >
             {loading
-              ? "正在登录..."
-              : "登录 NovaSpeak"}
+              ? (registerMode ? "正在注册..." : "正在登录...")
+              : (registerMode ? "创建普通用户账号" : "登录 NovaSpeak")}
           </button>
 
-          <div className="login-divider">
+          {!registerMode && <div className="login-divider">
             <span />
             <p>或者</p>
             <span />
-          </div>
+          </div>}
 
-          <button
+          {!registerMode && <button
             type="button"
             className="guest-login-button"
             onClick={() => {
@@ -293,9 +367,23 @@ export default function LoginScreen({ onLogin }) {
             disabled={loading || guestLoading}
           >
             访客进入
+          </button>}
+
+          <button
+            type="button"
+            className="registration-toggle-button"
+            onClick={() => {
+              setRegisterMode((current) => !current);
+              setShowGuestLogin(false);
+              setError("");
+              setSuccess("");
+            }}
+            disabled={loading || guestLoading}
+          >
+            {registerMode ? "返回账号登录" : "注册普通用户"}
           </button>
 
-          {showGuestLogin && (
+          {!registerMode && showGuestLogin && (
             <div
               className="guest-login-panel"
               role="dialog"

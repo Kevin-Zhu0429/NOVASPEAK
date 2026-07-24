@@ -9,6 +9,10 @@ import {
   getGuestUser,
 } from "./guest-auth.js";
 import { avatarUrlFromPath } from "./avatar.js";
+import {
+  canManageChannels,
+  getRoleLabel,
+} from "./authorization.js";
 
 export const SESSION_COOKIE_NAME = "novaspeak_session";
 
@@ -59,7 +63,10 @@ export function toPublicUser(user) {
     return null;
   }
 
-  const positions = getUserPositions(user.id);
+  const positions =
+    user.role === "user"
+      ? []
+      : getUserPositions(user.id);
 
   const positionNames = positions.map(
     (position) => POSITION_NAMES[position] || position
@@ -85,6 +92,7 @@ export function toPublicUser(user) {
     isCaptain: user.role === "admin",
 
     isGuest: false,
+    roleLabel: getRoleLabel(user.role),
 
     // 新的多职位字段
     positions,
@@ -94,10 +102,10 @@ export function toPublicUser(user) {
     avatarUrl: avatarUrlFromPath(user.avatar_path),
 
     // 暂时保留旧字段，兼容欢迎动画
-    position: positions[0] || "member",
+    position: positions[0] || (user.role === "user" ? null : "member"),
     positionName:
       positionNames[0] ||
-      POSITION_NAMES.member,
+      (user.role === "user" ? null : POSITION_NAMES.member),
   };
 }
 
@@ -298,6 +306,17 @@ export function destroyAllLoginSessions(req, res) {
   destroyGuestSession(req, res);
 }
 
+export function revokeOtherLoginSessions(userId, req) {
+  const sessionToken = req.cookies?.[SESSION_COOKIE_NAME];
+  if (!sessionToken) {
+    return db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  }
+  return db.prepare(`
+    DELETE FROM sessions
+    WHERE user_id = ? AND token_hash <> ?
+  `).run(userId, hashSessionToken(sessionToken));
+}
+
 /**
  * 后续保护接口时使用。
  */
@@ -328,7 +347,7 @@ export function requireRegistered(req, res, next) {
   if (!user) {
     if (getGuestUser(req)) {
       return res.status(403).json({
-        error: "该功能仅限正式战队成员",
+        error: "该功能仅限正式账号",
       });
     }
 
@@ -388,6 +407,27 @@ export function requireAdmin(req, res, next) {
     });
   }
 
+  req.authUser = user;
+  next();
+}
+
+export function requireChannelManager(req, res, next) {
+  const user = getCurrentUser(req);
+  if (!user) {
+    if (getGuestUser(req)) {
+      return res.status(403).json({
+        error: "该功能仅限管理员和战队成员",
+      });
+    }
+    return res.status(401).json({
+      error: "请先登录正式账号",
+    });
+  }
+  if (!canManageChannels(user.role)) {
+    return res.status(403).json({
+      error: "普通用户不能管理频道",
+    });
+  }
   req.authUser = user;
   next();
 }

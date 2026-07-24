@@ -5,6 +5,10 @@
 
 import express from "express";
 import {
+  canClearMusicQueue,
+  canControlMusic,
+} from "../authorization.js";
+import {
   encryptMusicCredential,
   isMusicCredentialConfigured,
   MUSIC_NOT_CONFIGURED,
@@ -331,8 +335,8 @@ export function createNeteaseMusicRouter({
     }
     snapshot.controls = {
       canControlPlayback:
-        req.authUser.role === "admin" || req.authUser.role === "member",
-      canClearQueue: req.authUser.role === "admin",
+        canControlMusic(req.authUser.role),
+      canClearQueue: canClearMusicQueue(req.authUser.role),
       hasOwnPending: snapshot.items.some(
         (item) => item.requester.isCurrentUser === true
       ),
@@ -351,9 +355,9 @@ export function createNeteaseMusicRouter({
   }
 
   function requirePlaybackMember(req, res, next) {
-    if (req.authUser.role !== "admin" && req.authUser.role !== "member") {
+    if (!canControlMusic(req.authUser.role)) {
       return res.status(403).json({
-        error: "只有正式战队成员可以控制频道音乐播放",
+        error: "只有正式账号可以控制频道音乐播放",
         code: "MUSIC_PLAYBACK_FORBIDDEN",
       });
     }
@@ -715,7 +719,7 @@ export function createNeteaseMusicRouter({
     "/channels/:channelId/queue",
     requireInChannel,
     (req, res) => {
-      if (req.authUser.role !== "admin") {
+      if (!canClearMusicQueue(req.authUser.role)) {
         return res.status(403).json({
           error: "只有管理员可以清空频道队列",
           code: MUSIC_QUEUE_ERROR.FORBIDDEN,

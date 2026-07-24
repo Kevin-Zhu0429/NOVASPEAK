@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { TrackSource } from "livekit-server-sdk";
+import {
+  canMoveRole,
+  canRemoveRole,
+} from "./authorization.js";
 
 // 只识别自建 LiveKit 未实现 moveParticipant 的 Twirp not implemented 错误；
 // 401/403、participant not found、超时、密钥错误等其他错误一律不触发 fallback。
@@ -29,6 +33,16 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     } catch { /* ignore invalid metadata */ }
     return participant?.identity || "目标成员";
   }
+  function participantRole(participant) {
+    try {
+      const metadata = JSON.parse(participant?.metadata || "{}");
+      return ["admin", "member", "user", "guest"].includes(metadata.role)
+        ? metadata.role
+        : null;
+    } catch {
+      return null;
+    }
+  }
   function microphoneTrack(participant) {
     return (participant?.tracks || []).find((track) => track.source === TrackSource.MICROPHONE || track.source === "MICROPHONE" || track.source === 2) || null;
   }
@@ -51,9 +65,21 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     return Array.isArray(permission.canPublishSources) && permission.canPublishSources.length > 0 && !permission.canPublishSources.some((source) => source === TrackSource.MICROPHONE || source === "MICROPHONE" || source === 2);
   }
 
-  async function validateBase({ actor, sourceChannelId, participantIdentity, allowAdminOnly = false, requireParticipant = true }) {
+  async function validateBase({
+    actor,
+    sourceChannelId,
+    participantIdentity,
+    allowAdminOnly = false,
+    operation = "remove",
+    requireParticipant = true,
+  }) {
     if (!actor) return { status: 401, error: "请先登录" };
-    if (allowAdminOnly ? actor.role !== "admin" : !["admin", "member"].includes(actor.role)) return { status: 403, error: allowAdminOnly ? "只有管理员可以执行该操作" : "该功能仅限正式战队成员" };
+    if (allowAdminOnly && actor.role !== "admin") {
+      return { status: 403, error: "只有管理员可以执行该操作" };
+    }
+    if (!allowAdminOnly && !["admin", "member", "user"].includes(actor.role)) {
+      return { status: 403, error: "访客不能管理语音成员" };
+    }
     const source = getChannel(sourceChannelId);
     if (!source) return { status: sourceChannelId ? 404 : 400, error: sourceChannelId ? "源频道不存在" : "请选择有效的源频道" };
     const identity = cleanIdentity(participantIdentity);
@@ -61,6 +87,24 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
     if (identity === actor.id) return { status: 400, error: "不能对自己执行该操作" };
     const participant = await findParticipant(source.id, identity);
     if (!participant && requireParticipant) return { status: 404, error: "目标成员不在当前频道" };
+    if (participant && !allowAdminOnly) {
+      const targetRole = participantRole(participant);
+      if (!targetRole) {
+        return { status: 403, error: "无法确认目标成员权限" };
+      }
+      const allowed =
+        operation === "move"
+          ? canMoveRole(actor.role, targetRole)
+          : canRemoveRole(actor.role, targetRole);
+      if (!allowed) {
+        return {
+          status: 403,
+          error: operation === "move"
+            ? "你没有权限移动该成员"
+            : "你没有权限将该成员移出频道",
+        };
+      }
+    }
     return { actor, source, identity, participant };
   }
 
@@ -133,7 +177,11 @@ export function createVoiceManagementService({ roomService, channelLookup, prese
   }
 
   async function move(input) {
-    const base = await validateBase({ ...input, allowAdminOnly: false });
+    const base = await validateBase({
+      ...input,
+      allowAdminOnly: false,
+      operation: "move",
+    });
     if (base.error) return base;
     const target = getChannel(input.targetChannelId);
     if (!target) return { status: input.targetChannelId ? 404 : 400, error: input.targetChannelId ? "目标频道不存在" : "请选择有效的目标频道" };

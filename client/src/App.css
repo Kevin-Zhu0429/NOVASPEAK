@@ -1841,13 +1841,19 @@ input {
   font-size: 12px;
 }
 
-.editor-section input {
+.editor-section input,
+.editor-section select {
   width: 100%;
   height: 42px;
   padding: 0 12px;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 9px;
   background: rgba(2, 12, 18, 0.78);
+  color: white;
+}
+
+.editor-section select option {
+  background: #0f172a;
   color: white;
 }
 
@@ -2287,6 +2293,31 @@ input {
 .guest-enter-button:disabled {
   opacity: 0.58;
   cursor: not-allowed;
+}
+
+.registration-toggle-button {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 10px;
+  border: 1px solid rgba(94, 234, 212, 0.28);
+  border-radius: 11px;
+  color: #99f6e4;
+  background: rgba(15, 118, 110, 0.12);
+  font-weight: 600;
+}
+
+.registration-toggle-button:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.55);
+  background: rgba(15, 118, 110, 0.24);
+}
+
+.login-success {
+  padding: 10px 12px;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 10px;
+  color: #a7f3d0;
+  background: rgba(6, 78, 59, 0.3);
+  font-size: 13px;
 }
 
 /* 频道内语音房间 */

@@ -2,7 +2,12 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import UserAvatar from "../common/UserAvatar";
 
-const ROLE_LABELS = { admin: "管理员", member: "战队成员", guest: "访客" };
+const ROLE_LABELS = {
+  admin: "管理员",
+  member: "战队成员",
+  user: "普通语音用户",
+  guest: "访客",
+};
 
 export default function MemberProfileDialog({ item, avatarUrl, memberKey, channelName, localPref, onClose }) {
   useEffect(() => {
@@ -12,7 +17,11 @@ export default function MemberProfileDialog({ item, avatarUrl, memberKey, channe
   }, [onClose]);
 
   const roleText = ROLE_LABELS[item.role] || "身份未知";
-  const positionText = Array.isArray(item.positionNames) && item.positionNames.length > 0 ? item.positionNames.join("、") : "未设置";
+  const positionText = item.role === "user"
+    ? "无战队职位"
+    : Array.isArray(item.positionNames) && item.positionNames.length > 0
+      ? item.positionNames.join("、")
+      : "未设置";
   const rows = [
     ["昵称", `${item.displayName}${item.isLocal ? "（我）" : ""}`],
     ["成员 ID", memberKey || item.id || "未知"],

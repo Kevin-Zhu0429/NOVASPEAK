@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getPositionText } from "../../utils/user-display";
+import { FORMAL_ROLES, getRoleLabel } from "../../utils/roles";
 import UserAvatar from "../common/UserAvatar";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -38,7 +39,7 @@ export default function TeamManagement({
   const [editingMember, setEditingMember] = useState(null);
   const [deletePending, setDeletePending] = useState(false);
   const [editForm, setEditForm] = useState({
-    nickname: "", positions: [], newPassword: "", confirmPassword: "",
+    nickname: "", role: "member", positions: [], newPassword: "", confirmPassword: "",
   });
   const [form, setForm] = useState({
     nickname: "", position: "member", password: "", confirmPassword: "",
@@ -71,6 +72,7 @@ export default function TeamManagement({
     setDeletePending(false);
     setEditForm({
       nickname: member.displayName || member.nickname || "",
+      role: member.role,
       positions: member.positions || [],
       newPassword: "",
       confirmPassword: "",
@@ -129,6 +131,14 @@ export default function TeamManagement({
     }, "职位修改成功");
   }
 
+  async function saveRole() {
+    await runEditRequest(`/api/admin/members/${editingMember.id}/role`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: editForm.role }),
+    }, "账号权限修改成功");
+  }
+
   async function resetPassword(event) {
     event.preventDefault();
     const updated = await runEditRequest(
@@ -160,6 +170,7 @@ export default function TeamManagement({
         setEditForm((current) => ({
           ...current,
           nickname: member.displayName,
+          role: member.role,
           positions: member.positions || [],
         }));
         announceChange(member);
@@ -215,7 +226,7 @@ export default function TeamManagement({
                   <div className="management-member" key={member.id}>
                     <UserAvatar avatarUrl={member.avatarUrl} displayName={member.displayName} size="md" />
                     <div className="member-information"><strong>{member.displayName}</strong><span>{getPositionText(member)}</span></div>
-                    <div className={member.role === "admin" ? "member-role captain" : "member-role"}>{member.role === "admin" ? "管理员" : "成员"}</div>
+                    <div className={member.role === "admin" ? "member-role captain" : "member-role"}>{getRoleLabel(member.role)}</div>
                     <button type="button" className="member-edit-button" onClick={() => openEditor(member)}>编辑</button>
                   </div>
                 ))}
@@ -239,9 +250,27 @@ export default function TeamManagement({
       {editingMember && (
         <div className="member-editor-backdrop" role="presentation">
           <div className="member-editor" role="dialog" aria-modal="true" aria-label={`编辑 ${editingMember.displayName}`}>
-            <header><div><span>编辑正式成员</span><h3>{editingMember.displayName}</h3><p>{editingMember.role === "admin" ? "管理员" : "成员"} · {getPositionText(editingMember)}</p></div><button type="button" onClick={() => setEditingMember(null)} aria-label="关闭编辑">×</button></header>
+            <header><div><span>编辑正式账号</span><h3>{editingMember.displayName}</h3><p>{getRoleLabel(editingMember.role)}{editingMember.role === "user" ? "" : ` · ${getPositionText(editingMember)}`}</p></div><button type="button" onClick={() => setEditingMember(null)} aria-label="关闭编辑">×</button></header>
+            <section className="editor-section">
+              <h4>账号权限</h4>
+              <p>访客与正式账号不能互相转换；权限变更后目标用户需要重新登录。</p>
+              <label>
+                <span>角色</span>
+                <select
+                  value={editForm.role}
+                  onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}
+                  disabled={submitting || editingMember.id === currentUser?.id}
+                >
+                  {FORMAL_ROLES.map((role) => (
+                    <option key={role} value={role}>{getRoleLabel(role)}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={saveRole} disabled={submitting || editingMember.id === currentUser?.id || editForm.role === editingMember.role}>保存账号权限</button>
+              {editingMember.id === currentUser?.id && <p>当前管理员不能在这里修改自己的角色。</p>}
+            </section>
             <form className="editor-section" onSubmit={saveNickname}><h4>修改昵称</h4><label><span>新游戏昵称</span><input value={editForm.nickname} onChange={(e) => setEditForm((current) => ({ ...current, nickname: e.target.value }))} minLength={2} maxLength={24} disabled={submitting} /></label><button type="submit" disabled={submitting}>保存昵称</button></form>
-            <section className="editor-section"><h4>修改职位</h4><p>职位只用于展示，不会改变账号权限。</p><div className="position-options">{POSITION_OPTIONS.map(([value, label]) => { const selected = editForm.positions.includes(value); return <button type="button" key={value} className={selected ? "position-option selected" : "position-option"} onClick={() => togglePosition(value)} disabled={submitting}>{selected ? "✓ " : ""}{label}</button>; })}</div><button type="button" onClick={savePositions} disabled={submitting}>保存职位</button></section>
+            {editingMember.role !== "user" && <section className="editor-section"><h4>修改职位</h4><p>职位只用于展示，不会改变账号权限。</p><div className="position-options">{POSITION_OPTIONS.map(([value, label]) => { const selected = editForm.positions.includes(value); return <button type="button" key={value} className={selected ? "position-option selected" : "position-option"} onClick={() => togglePosition(value)} disabled={submitting}>{selected ? "✓ " : ""}{label}</button>; })}</div><button type="button" onClick={savePositions} disabled={submitting}>保存职位</button></section>}
             {editingMember.id !== currentUser?.id && <form className="editor-section" onSubmit={resetPassword}><h4>重置密码</h4><p>重置后，该成员的现有登录会话会立即失效。</p><label><span>新密码</span><input type="password" value={editForm.newPassword} onChange={(e) => setEditForm((current) => ({ ...current, newPassword: e.target.value }))} minLength={8} maxLength={128} disabled={submitting} /></label><label><span>确认新密码</span><input type="password" value={editForm.confirmPassword} onChange={(e) => setEditForm((current) => ({ ...current, confirmPassword: e.target.value }))} minLength={8} maxLength={128} disabled={submitting} /></label><button type="submit" disabled={submitting}>重置密码</button></form>}
             <section className="editor-section danger-zone"><h4>删除账号</h4>{editingMember.id === currentUser?.id ? <p>当前管理员不能在战队管理中删除自己。</p> : deletePending ? <div className="delete-confirm"><p>确定永久删除成员“{editingMember.displayName}”吗？此操作无法撤销。</p><button type="button" className="danger-button" onClick={deleteMember} disabled={submitting}>确认删除</button><button type="button" onClick={() => setDeletePending(false)} disabled={submitting}>取消</button></div> : <button type="button" className="danger-button" onClick={() => setDeletePending(true)}>删除成员账号</button>}</section>
           </div>

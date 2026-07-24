@@ -11,7 +11,7 @@ export function parseParticipantMetadata(participant) {
       metadata = {};
     }
   }
-  const role = ["admin", "member", "guest"].includes(metadata.role) ? metadata.role : undefined;
+  const role = ["admin", "member", "user", "guest"].includes(metadata.role) ? metadata.role : undefined;
   const positions = Array.isArray(metadata.positions) ? metadata.positions.filter((item) => typeof item === "string") : [];
   const positionNames = Array.isArray(metadata.positionNames) ? metadata.positionNames.filter((item) => typeof item === "string") : [];
   const displayName = typeof metadata.displayName === "string" && metadata.displayName.trim()

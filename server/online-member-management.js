@@ -1,4 +1,8 @@
 import { canEnterChannel } from "./channels.js";
+import {
+  canMoveRole,
+  canRemoveRole,
+} from "./authorization.js";
 
 function cleanId(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -12,8 +16,8 @@ export function createOnlineMemberManagementService({
 } = {}) {
   function validateActor(actor) {
     if (!actor) return { status: 401, error: "请先登录" };
-    if (!["admin", "member"].includes(actor.role)) {
-      return { status: 403, error: "该功能仅限正式战队成员" };
+    if (!["admin", "member", "user"].includes(actor.role)) {
+      return { status: 403, error: "访客不能管理在线成员" };
     }
     return null;
   }
@@ -39,6 +43,9 @@ export function createOnlineMemberManagementService({
   function move({ actor, targetPresenceId, targetChannelId } = {}) {
     const base = targetFor(actor, targetPresenceId);
     if (base.error) return base;
+    if (!canMoveRole(actor.role, base.target.role)) {
+      return { status: 403, error: "你没有权限移动该成员" };
+    }
     const channelId = cleanId(targetChannelId);
     const channel = channelId ? channelLookup?.(channelId) : null;
     if (!channel) {
@@ -74,8 +81,8 @@ export function createOnlineMemberManagementService({
   function kick({ actor, targetPresenceId } = {}) {
     const base = targetFor(actor, targetPresenceId);
     if (base.error) return base;
-    if (base.target.role === "admin" && actor.role !== "admin") {
-      return { status: 403, error: "战队成员不能将管理员移出服务器" };
+    if (!canRemoveRole(actor.role, base.target.role)) {
+      return { status: 403, error: "你没有权限将该成员移出服务器" };
     }
 
     const delivered = presenceService.disconnectPresenceMember?.(base.presenceId, {

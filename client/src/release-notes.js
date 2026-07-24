@@ -1,10 +1,22 @@
 // 3.0.6 已被生产环境使用（见 AGENTS.md 生产基线快照），本次未合并的
 // DJ 功能直接使用下一个未占用的补丁版本 3.0.7。
-export const WEB_APP_VERSION = "3.0.7";
+export const WEB_APP_VERSION = "3.0.8";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
 // 桌面端大版本才标记 requiresDesktopUpdate: true 并通过 OTA 发布。
 export const RELEASE_NOTES = Object.freeze([
+  Object.freeze({
+    version: "3.0.8",
+    title: "普通用户注册与分级权限",
+    releasedAt: "2026-07-23",
+    requiresDesktopUpdate: false,
+    changes: Object.freeze([
+      "登录页新增普通用户注册，注册后可返回登录并使用正式账号功能",
+      "新增管理员、战队成员、普通用户、访客四级权限与统一服务端校验",
+      "普通用户可使用音乐控制、歌曲置顶、随机播放，并可移动普通用户和访客",
+      "管理员可在战队管理中调整正式账号角色，角色变更立即生效并记录审计",
+    ]),
+  }),
   Object.freeze({
     version: "3.0.7",
     title: "音乐机器人 DJ 混音",
