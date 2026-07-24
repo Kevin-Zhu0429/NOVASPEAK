@@ -1841,13 +1841,19 @@ input {
   font-size: 12px;
 }
 
-.editor-section input {
+.editor-section input,
+.editor-section select {
   width: 100%;
   height: 42px;
   padding: 0 12px;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 9px;
   background: rgba(2, 12, 18, 0.78);
+  color: white;
+}
+
+.editor-section select option {
+  background: #0f172a;
   color: white;
 }
 
