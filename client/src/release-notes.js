@@ -1,5 +1,3 @@
-// 3.0.6 已被生产环境使用（见 AGENTS.md 生产基线快照），本次未合并的
-// DJ 功能直接使用下一个未占用的补丁版本 3.0.7。
 export const WEB_APP_VERSION = "3.0.8";
 
 // 网页小更新由服务器直接下发，不要求重新安装；只有 Electron/安装器等
@@ -8,13 +6,12 @@ export const RELEASE_NOTES = Object.freeze([
   Object.freeze({
     version: "3.0.8",
     title: "普通用户注册与分级权限",
-    releasedAt: "2026-07-23",
+    releasedAt: "2026-07-24",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "登录页新增普通用户注册，注册后可返回登录并使用正式账号功能",
+      "登录页新增普通用户注册,
       "新增管理员、战队成员、普通用户、访客四级权限与统一服务端校验",
-      "普通用户可使用音乐控制、歌曲置顶、随机播放，并可移动普通用户和访客",
-      "管理员可在战队管理中调整正式账号角色，角色变更立即生效并记录审计",
+      "权限管理系统完善"，
     ]),
   }),
   Object.freeze({
@@ -23,10 +20,9 @@ export const RELEASE_NOTES = Object.freeze([
     releasedAt: "2026-07-23",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "新增音乐机器人 DJ 等功率交叉淡化：切歌前约 10 秒下一首平滑淡入重叠",
-      "新增每频道 DJ 混音开关，管理员与战队成员可在机器人名片上开启或关闭",
-      "优化音乐机器人控制按钮布局：等宽等高排列，窄窗口下不再挤成竖排文字",
-      "保持公平队列、暂停、切歌和清空队列行为完全兼容",
+      "新增音乐机器人 DJ 混音功能：切歌前约 10 秒下一首平滑淡入重叠",
+      "新增每频道 DJ 混音开关,
+      "优化音乐机器人控制按钮布局",
     ]),
   }),
   Object.freeze({
@@ -66,7 +62,7 @@ export const RELEASE_NOTES = Object.freeze([
     releasedAt: "2026-07-21",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "降低音乐机器人源音轨的基础输出增益，默认 10% 音量更加舒适",
+      "降低音乐机器人源音轨的基础输出增益，默认 10% 音量",
       "保留每位用户对音乐机器人音量和静音状态的本地调节",
     ]),
   }),
