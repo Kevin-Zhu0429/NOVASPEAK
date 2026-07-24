@@ -9,7 +9,7 @@ export const RELEASE_NOTES = Object.freeze([
     releasedAt: "2026-07-24",
     requiresDesktopUpdate: false,
     changes: Object.freeze([
-      "登录页新增普通用户注册,
+      "登录页新增普通用户注册",
       "新增管理员、战队成员、普通用户、访客四级权限与统一服务端校验",
       "权限管理系统完善"，
     ]),
@@ -21,7 +21,7 @@ export const RELEASE_NOTES = Object.freeze([
     requiresDesktopUpdate: false,
     changes: Object.freeze([
       "新增音乐机器人 DJ 混音功能：切歌前约 10 秒下一首平滑淡入重叠",
-      "新增每频道 DJ 混音开关,
+      "新增每频道 DJ 混音开关",
       "优化音乐机器人控制按钮布局",
     ]),
   }),
