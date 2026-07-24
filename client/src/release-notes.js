@@ -11,7 +11,7 @@ export const RELEASE_NOTES = Object.freeze([
     changes: Object.freeze([
       "登录页新增普通用户注册",
       "新增管理员、战队成员、普通用户、访客四级权限与统一服务端校验",
-      "权限管理系统完善"，
+      "权限管理系统完善",
     ]),
   }),
   Object.freeze({
